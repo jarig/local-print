@@ -1,28 +1,74 @@
 <#
 .SYNOPSIS
-    Deploys LocalPrint to the local-print folder on my-nas.
+    Deploys LocalPrint to the folder named in localprint.conf on the
+    configured server.
 
 .DESCRIPTION
-    Stages every application file with LF line endings, uploads it over scp
-    into ~/local-print/ on the NAS, makes the entry points executable and
-    verifies the app imports cleanly inside the server virtualenv.
+    Reads the target host, user and path from localprint.conf, stages every
+    application file with LF line endings, uploads it over scp, makes the
+    entry points executable and verifies the app imports cleanly inside the
+    server virtualenv.
 
 .EXAMPLE
     .\deploy.ps1
     .\deploy.ps1 -Restart
+    .\deploy.ps1 -RemoteHost other-nas -RemoteUser me
 #>
 [CmdletBinding()]
 param(
-    [string]$RemoteHost = $(if ($env:LOCALPRINT_HOST) { $env:LOCALPRINT_HOST } else { "my-nas" }),
-    [string]$RemoteUser = $(if ($env:LOCALPRINT_USER) { $env:LOCALPRINT_USER } else { "me" }),
-    [string]$RemotePath = "local-print",
+    [string]$RemoteHost,
+    [string]$RemoteUser,
+    [string]$RemotePath,
     [switch]$Restart
 )
 
 $ErrorActionPreference = "Stop"
 
-$target = "$RemoteUser@$RemoteHost"
 $source = $PSScriptRoot
+$configPath = Join-Path $source "localprint.conf"
+
+# Site-specific values live in localprint.conf; there are no defaults here.
+function Read-LocalPrintConfig {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "No config file at $Path. Copy localprint.conf.example to localprint.conf and fill it in."
+    }
+
+    $values = @{}
+    foreach ($line in Get-Content $Path) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
+
+        $split = $trimmed.IndexOf("=")
+        if ($split -lt 1) { continue }
+
+        $key = $trimmed.Substring(0, $split).Trim()
+        $value = $trimmed.Substring($split + 1).Trim().Trim('"').Trim("'")
+        $values[$key] = $value
+    }
+    return $values
+}
+
+function Get-Setting {
+    param([hashtable]$Config, [string]$Key, [string]$Override)
+
+    if ($Override) { return $Override }
+
+    $fromEnv = [Environment]::GetEnvironmentVariable($Key)
+    if ($fromEnv) { return $fromEnv }
+
+    if ($Config.ContainsKey($Key) -and $Config[$Key]) { return $Config[$Key] }
+
+    throw "$Key is not set. Add it to $configPath, pass it as a parameter, or set it in the environment."
+}
+
+$settings = Read-LocalPrintConfig -Path $configPath
+$RemoteHost = Get-Setting $settings "LOCALPRINT_HOST" $RemoteHost
+$RemoteUser = Get-Setting $settings "LOCALPRINT_USER" $RemoteUser
+$RemotePath = Get-Setting $settings "LOCALPRINT_REMOTE_PATH" $RemotePath
+
+$target = "$RemoteUser@$RemoteHost"
 
 $files = @(
     "app.py",
@@ -31,6 +77,8 @@ $files = @(
     "requirements.txt",
     "start.sh",
     "install.sh",
+    "localprint.conf",
+    "localprint.conf.example",
     "templates/index.html",
     "static/style.css",
     "static/app.js"
@@ -84,6 +132,8 @@ try {
         (Join-Path $staging "requirements.txt") `
         (Join-Path $staging "start.sh") `
         (Join-Path $staging "install.sh") `
+        (Join-Path $staging "localprint.conf") `
+        (Join-Path $staging "localprint.conf.example") `
         "${target}:~/$RemotePath/"
     if ($LASTEXITCODE -ne 0) { throw "Upload of application files failed." }
 
@@ -107,10 +157,13 @@ finally {
 }
 
 Write-Host "Setting permissions and verifying..." -ForegroundColor Cyan
+# No double quotes in the remote command: PowerShell strips them when passing
+# arguments to a native executable, which silently corrupts the Python snippet.
 $verify = "cd ~/$RemotePath && chmod +x start.sh install.sh app.py && " +
-          "venv/bin/python3 -c 'import app; print(""import ok - printer:"", app.config.PRINTER, ""port:"", app.config.PORT)'"
-ssh $target $verify
+          "venv/bin/python3 -c 'import app; print(app.config.PRINTER, app.config.PORT)'"
+$imported = ssh $target $verify
 if ($LASTEXITCODE -ne 0) { throw "Remote verification failed." }
+Write-Host "  import ok - printer/port: $imported" -ForegroundColor DarkGray
 
 if ($Restart) {
     Write-Host "Restarting service..." -ForegroundColor Cyan
@@ -134,11 +187,11 @@ if ($Restart) {
         ssh -n $target $stop | Out-Null
         Start-Sleep -Seconds 2
 
-        $start = "(cd ~/$RemotePath && setsid ./start.sh > local-print.log 2>&1 < /dev/null &) > /dev/null 2>&1"
+        $start = "(cd ~/$RemotePath && setsid ./start.sh > localprint.log 2>&1 < /dev/null &) > /dev/null 2>&1"
         ssh -n $target $start
         Start-Sleep -Seconds 3
 
-        ssh -n $target "cat ~/$RemotePath/local-print.log | head -n 6"
+        ssh -n $target "cat ~/$RemotePath/localprint.log | head -n 6"
     }
 }
 

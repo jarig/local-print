@@ -10,7 +10,10 @@
         return;
     }
 
-    var MAX_BYTES = 50 * 1024 * 1024;
+    // The limit is enforced by the server; mirroring it here only avoids a
+    // pointless upload, so it must come from the same configuration.
+    var MAX_UPLOAD_MB = (window.LOCALPRINT && window.LOCALPRINT.maxUploadMb) || 0;
+    var MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
     var PDF_TYPES = { pdf: true };
     var IMAGE_TYPES = { jpg: true, jpeg: true, png: true };
 
@@ -428,8 +431,8 @@
         imageInput.disabled = pdf;
         pagesField.hidden = !pdf;
         dropHint.textContent = pdf
-            ? "PDF \u00b7 up to 50 MB"
-            : "JPEG or PNG \u00b7 up to 50 MB";
+            ? "PDF \u00b7 up to " + MAX_UPLOAD_MB + " MB"
+            : "JPEG or PNG \u00b7 up to " + MAX_UPLOAD_MB + " MB";
     }
 
     /** Assign a dropped/selected file to the input matching its type. */
@@ -455,10 +458,10 @@
             return;
         }
 
-        if (file.size > MAX_BYTES) {
+        if (MAX_BYTES && file.size > MAX_BYTES) {
             showMessage(
                 "\u201c" + file.name + "\u201d is " + formatSize(file.size) +
-                    ". The limit is 50 MB.",
+                    ". The limit is " + MAX_UPLOAD_MB + " MB.",
                 false
             );
             return;

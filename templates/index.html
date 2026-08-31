@@ -118,7 +118,8 @@
 <script>
     window.LOCALPRINT = {
         pdfLib: "{{ url_for('static', filename='vendor/pdf.min.js') }}",
-        pdfWorker: "{{ url_for('static', filename='vendor/pdf.worker.min.js') }}"
+        pdfWorker: "{{ url_for('static', filename='vendor/pdf.worker.min.js') }}",
+        maxUploadMb: {{ max_upload_mb }}
     };
 </script>
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>

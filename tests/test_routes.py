@@ -37,8 +37,8 @@ def test_get_renders_the_form(client):
 
 
 def test_get_shows_a_message_from_the_query_string(client):
-    response = client.get("/?message=request+id+is+my-printer-9")
-    assert "request id is my-printer-9" in response.get_data(as_text=True)
+    response = client.get("/?message=request+id+is+office-9")
+    assert "request id is office-9" in response.get_data(as_text=True)
 
 
 def test_form_declares_multipart_encoding(client):
@@ -60,6 +60,19 @@ def test_assets_are_served(client):
         "/static/vendor/pdf.worker.min.js",
     ):
         assert client.get(path).status_code == 200, path
+
+
+def test_the_page_publishes_the_configured_upload_limit(client):
+    # The client-side size check must not be able to drift from the server's.
+    body = client.get("/").get_data(as_text=True)
+    assert f"maxUploadMb: {config.MAX_UPLOAD_MB}" in body
+    assert f"up to {config.MAX_UPLOAD_MB} MB" in body
+
+
+def test_the_script_takes_its_limit_from_the_page(client):
+    script = client.get("/static/app.js").get_data(as_text=True)
+    assert "window.LOCALPRINT && window.LOCALPRINT.maxUploadMb" in script
+    assert "50 * 1024 * 1024" not in script
 
 
 # --------------------------------------------------------------------------
@@ -391,7 +404,7 @@ def test_xhr_success_returns_json_instead_of_a_redirect(
     assert response.status_code == 200
     assert response.is_json
     assert response.get_json()["ok"] is True
-    assert "my-printer" in response.get_json()["message"]
+    assert "office" in response.get_json()["message"]
 
 
 def test_xhr_failure_returns_json_with_the_reason(client, recorded_jobs):

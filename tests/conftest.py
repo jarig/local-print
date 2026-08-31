@@ -13,6 +13,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Tests run against the committed template, never against whatever the
+# developer happens to have in localprint.conf.
+os.environ["LOCALPRINT_CONFIG"] = str(ROOT / "localprint.conf.example")
+
 # The app must never touch a real printer during tests.
 os.environ["LOCALPRINT_FAKE_PRINTER"] = "1"
 
@@ -193,7 +197,7 @@ def recorded_jobs(monkeypatch):
                 "size": os.path.getsize(filename),
             }
         )
-        return "request id is my-printer-1 (1 file(s))"
+        return "request id is office-1 (1 file(s))"
 
     monkeypatch.setattr(app_module.printing, "submit", fake_submit)
     return jobs

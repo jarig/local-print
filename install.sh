@@ -51,6 +51,22 @@ fi
 [ -f "$APP_DIR/requirements.txt" ] || die "requirements.txt not found in $APP_DIR."
 command -v systemctl >/dev/null || die "systemd is required but systemctl was not found."
 
+# There are no built-in defaults, so a missing or incomplete config would only
+# surface later as a service that restarts forever. Fail here instead.
+if [ ! -f "$APP_DIR/localprint.conf" ]; then
+    die "No localprint.conf in $APP_DIR. Copy localprint.conf.example to localprint.conf and fill it in."
+fi
+
+if ! CONFIG_ERROR="$(cd "$APP_DIR" && sudo -u "$RUN_USER" python3 -c '
+import sys
+try:
+    import config
+except Exception as error:
+    sys.exit(str(error))
+' 2>&1)"; then
+    die "Configuration problem: $CONFIG_ERROR"
+fi
+
 if ! command -v lp >/dev/null; then
     printf '\033[33m%s\033[0m\n' "Warning: the 'lp' command was not found. Install CUPS before printing."
 fi
@@ -67,7 +83,8 @@ say "Installing Python dependencies..."
 sudo -u "$RUN_USER" "$VENV/bin/pip" install --quiet --upgrade pip
 sudo -u "$RUN_USER" "$VENV/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 
-PORT="$(sudo -u "$RUN_USER" "$PYTHON" -c 'import config; print(config.PORT)' 2>/dev/null || echo 8081)"
+PORT="$(cd "$APP_DIR" && sudo -u "$RUN_USER" "$PYTHON" -c 'import config; print(config.PORT)')" \
+    || die "Could not read the port from localprint.conf."
 
 # ------------------------------------------------------------------- unit
 
@@ -134,7 +151,7 @@ fi
 
 # The app binds the LAN address only, so ask it which one rather than
 # assuming 127.0.0.1 (which it deliberately never listens on).
-LAN_IP="$(sudo -u "$RUN_USER" "$PYTHON" -c 'import app; print(app.get_lan_ip())' 2>/dev/null || true)"
+LAN_IP="$(cd "$APP_DIR" && sudo -u "$RUN_USER" "$PYTHON" -c 'import app; print(app.get_lan_ip())' 2>/dev/null || true)"
 [ -n "$LAN_IP" ] || LAN_IP="127.0.0.1"
 URL="http://${LAN_IP}:${PORT}"
 

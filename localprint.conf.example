@@ -1,0 +1,53 @@
+# LocalPrint configuration -- template.
+#
+#   cp localprint.conf.example localprint.conf
+#
+# Then edit localprint.conf. It is git-ignored, because it describes your
+# network rather than the project. There are no built-in defaults: every
+# setting below must be present or the app refuses to start.
+#
+# Any setting can also be supplied through the environment, which wins over
+# this file.
+
+
+# --- Printing ---------------------------------------------------------
+
+# The CUPS queue to print to. Run `lpstat -p` on the server to list them.
+LOCALPRINT_PRINTER=my-printer
+
+# Port the web UI listens on.
+LOCALPRINT_PORT=8081
+
+# The app only binds an address starting with this prefix, so it can never
+# accidentally listen on a public interface. The trailing dot is required.
+LOCALPRINT_LAN_PREFIX=10.1.2.
+
+
+# --- Limits -----------------------------------------------------------
+
+# Largest upload accepted, in megabytes.
+LOCALPRINT_MAX_UPLOAD_MB=50
+
+# How long to wait for the `lp` command before giving up, in seconds.
+LOCALPRINT_LP_TIMEOUT_SECONDS=30
+
+# Range allowed in the "Copies" field.
+LOCALPRINT_MIN_COPIES=1
+LOCALPRINT_MAX_COPIES=20
+
+
+# --- Deployment (used by deploy.ps1, ignored by the app) --------------
+
+# Where `deploy.ps1` uploads the application.
+LOCALPRINT_HOST=my-nas
+LOCALPRINT_USER=me
+LOCALPRINT_REMOTE_PATH=local-print
+
+
+# --- Development switches ---------------------------------------------
+#
+# Uncomment to stub out the printer and allow binding 127.0.0.1, so the UI
+# can be developed on a machine with no CUPS installed.
+#
+# LOCALPRINT_FAKE_PRINTER=1
+# LOCALPRINT_DEBUG=1

@@ -154,11 +154,11 @@ def test_submit_returns_the_cups_confirmation(monkeypatch):
     _with_real_printer(monkeypatch)
 
     class Result:
-        stdout = "request id is my-printer-42 (1 file(s))"
+        stdout = "request id is office-42 (1 file(s))"
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Result())
     assert printing.submit("/tmp/a.pdf", 1, False) == (
-        "request id is my-printer-42 (1 file(s))"
+        "request id is office-42 (1 file(s))"
     )
 
 

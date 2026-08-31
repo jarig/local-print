@@ -9,7 +9,7 @@ account.
 
 ```
 ┌──────────────────────────────┐
-│  Print              ● my-printer  │
+│  Print            ● printer  │
 │  ┌────────┬────────┐         │
 │  │  PDF   │ Image  │         │
 │  └────────┴────────┘         │
@@ -54,19 +54,25 @@ account.
 git clone https://github.com/jarig/local-print.git
 cd local-print
 
+cp localprint.conf.example localprint.conf
+$EDITOR localprint.conf          # printer name, port, LAN prefix
+
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
 ./start.sh
 ```
 
-The server prints the URL it bound to, e.g. `http://10.1.2.3:8081`.
+The server prints the URL it bound to, e.g. `http://10.1.2.15:8081`.
 Open that from your phone.
 
-> By default the app only binds an address in `10.1.2.0/24` and refuses
-> to start otherwise, so it can never accidentally listen on `0.0.0.0`. If
-> your LAN uses a different range, set `LOCALPRINT_LAN_PREFIX` (see
-> [Configuration](#configuration)).
+> There are no built-in defaults. If `localprint.conf` is missing or
+> incomplete the app stops with a message naming the setting, rather than
+> guessing a printer or a network. See [Configuration](#configuration).
+
+> The app only binds an address starting with `LOCALPRINT_LAN_PREFIX` and
+> refuses to start otherwise, so it can never accidentally listen on
+> `0.0.0.0`.
 
 ### Developing without a printer
 
@@ -85,17 +91,19 @@ LOCALPRINT_FAKE_PRINTER=1 LOCALPRINT_DEBUG=1 python3 app.py
 restarts if it dies. Run it **on the server**, from the install directory:
 
 ```bash
-cd ~/local-print
+cd /path/to/local-print
+cp localprint.conf.example localprint.conf   # if you have not already
 ./install.sh
 ```
 
 It re-runs itself under `sudo` and will:
 
-1. Create the virtualenv (`venv/`) if it is missing.
-2. Install `requirements.txt`.
-3. Write `/etc/systemd/system/localprint.service`.
-4. Enable it for `multi-user.target` and start it.
-5. Wait for the app to answer on its LAN URL, and print that URL.
+1. Check that `localprint.conf` exists and is complete, and stop if not.
+2. Create the virtualenv (`venv/`) if it is missing.
+3. Install `requirements.txt`.
+4. Write `/etc/systemd/system/localprint.service`.
+5. Enable it for `multi-user.target` and start it.
+6. Wait for the app to answer on its LAN URL, and print that URL.
 
 It is safe to re-run — it rewrites the unit and restarts the service. Any
 copy you started by hand is stopped first, so the two never fight over the
@@ -126,8 +134,8 @@ permanently.
 
 ## Deploying from a workstation
 
-`deploy.ps1` (PowerShell) uploads the app over `scp` to `~/local-print/` on the
-server:
+`deploy.ps1` (PowerShell) uploads the app over `scp` to the server named in
+`localprint.conf`:
 
 ```powershell
 .\deploy.ps1                 # upload only
@@ -135,31 +143,63 @@ server:
 ```
 
 It normalises line endings to LF (a CRLF shebang makes `start.sh`
-unrunnable on Linux) while copying vendored bundles byte for byte. If the
-systemd unit is installed, `-Restart` restarts *that*; otherwise it starts a
-detached process directly.
+unrunnable on Linux) while copying vendored bundles byte for byte, and
+uploads `localprint.conf` along with the code so the server has its
+settings. If the systemd unit is installed, `-Restart` restarts *that*;
+otherwise it starts a detached process directly.
 
-Set the target with parameters or environment variables:
+The target comes from `LOCALPRINT_HOST`, `LOCALPRINT_USER` and
+`LOCALPRINT_REMOTE_PATH` in `localprint.conf`, and can be overridden per
+run:
 
 ```powershell
 .\deploy.ps1 -RemoteHost my-nas -RemoteUser me
-$env:LOCALPRINT_HOST = "my-nas"; $env:LOCALPRINT_USER = "me"
 ```
 
 ## Configuration
 
-Everything is read from the environment at startup.
+All settings live in **`localprint.conf`** next to `app.py`. That file is
+git-ignored because it describes your network, not the project; copy the
+committed template to create it:
 
-| Variable | Default | Purpose |
+```bash
+cp localprint.conf.example localprint.conf
+```
+
+It is a plain `KEY=value` file (`#` starts a comment), readable by the app,
+by `install.sh` and by `deploy.ps1` alike. **Nothing has a default** — every
+setting below must be present, or the app exits with an error naming it.
+Environment variables of the same name override the file, which is handy for
+one-off runs and for the test suite.
+
+| Setting | Example | Purpose |
 | --- | --- | --- |
-| `LOCALPRINT_PRINTER` | `my-printer` | CUPS queue name (`lpstat -p` lists them) |
+| `LOCALPRINT_PRINTER` | `office` | CUPS queue name (`lpstat -p` lists them) |
 | `LOCALPRINT_PORT` | `8081` | Port to listen on |
-| `LOCALPRINT_LAN_PREFIX` | `10.1.2.` | Required prefix of the bind address |
-| `LOCALPRINT_FAKE_PRINTER` | unset | `1` stubs the printer and allows binding localhost |
-| `LOCALPRINT_DEBUG` | unset | `1` enables the Flask reloader |
+| `LOCALPRINT_LAN_PREFIX` | `10.1.2.` | Required prefix of the bind address; the trailing dot is required, or `10.1.2` would also match `10.1.22.x` |
+| `LOCALPRINT_MAX_UPLOAD_MB` | `50` | Largest accepted upload; also shown in the UI |
+| `LOCALPRINT_LP_TIMEOUT_SECONDS` | `30` | How long to wait for `lp` |
+| `LOCALPRINT_MIN_COPIES` | `1` | Lower bound of the Copies field |
+| `LOCALPRINT_MAX_COPIES` | `20` | Upper bound of the Copies field |
 
-Limits that are rarely worth changing (upload size, copy bounds, allowed
-extensions, `lp` timeout) live at the top of `config.py`.
+Deployment settings, read by `deploy.ps1` only:
+
+| Setting | Example | Purpose |
+| --- | --- | --- |
+| `LOCALPRINT_HOST` | `my-nas` | SSH host to deploy to |
+| `LOCALPRINT_USER` | `me` | SSH user |
+| `LOCALPRINT_REMOTE_PATH` | `local-print` | Folder under the user's home |
+
+Optional development switches, normally left unset:
+
+| Setting | Purpose |
+| --- | --- |
+| `LOCALPRINT_FAKE_PRINTER` | `1` stubs the printer and allows binding localhost |
+| `LOCALPRINT_DEBUG` | `1` enables the Flask reloader |
+| `LOCALPRINT_CONFIG` | Path to an alternative config file |
+
+Accepted file types are a property of the printing pipeline rather than a
+site preference, so they stay in `config.py`.
 
 ## Tests
 
@@ -194,7 +234,8 @@ touches the filesystem.
 local-print/
 ├── app.py                 # Flask app: routes and request validation
 ├── printing.py            # Builds and runs the lp command
-├── config.py              # Printer name, port, limits
+├── config.py              # Strict loader for localprint.conf
+├── localprint.conf.example# Configuration template
 ├── templates/index.html
 ├── static/
 │   ├── style.css          # Mobile-first, light + dark

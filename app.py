@@ -101,7 +101,7 @@ def respond(message, status=200, ok=False):
         message=message,
         ok=ok,
         printer=config.PRINTER,
-        max_upload_mb=config.MAX_UPLOAD_SIZE // (1024 * 1024),
+        max_upload_mb=config.MAX_UPLOAD_MB,
         min_copies=config.MIN_COPIES,
         max_copies=config.MAX_COPIES,
     ), status
@@ -194,7 +194,7 @@ def index():
 @app.errorhandler(413)
 def too_large(_error):
     return respond(
-        f"File is too large. Maximum size is {config.MAX_UPLOAD_SIZE // (1024 * 1024)} MB.",
+        f"File is too large. Maximum size is {config.MAX_UPLOAD_MB} MB.",
         413,
     )
 

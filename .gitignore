@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 .venv/
 local-print.log
+localprint.log
 .pytest_cache/
 .playwright-mcp/
 test-results/
+
+# Site-specific settings. Use localprint.conf.example as the template.
+localprint.conf

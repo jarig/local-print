@@ -19,18 +19,22 @@ the interface can be developed and previewed independently.
 
 ## 2. Deployment target
 
+The concrete host, user, printer and network are **not** recorded here:
+they live in `localprint.conf` (see §5.2), which is git-ignored. The
+project only assumes the shape of the target:
+
 | Property | Value |
 | --- | --- |
-| Host | `my-nas` (Debian 12, Python 3.11.2) |
-| User | `me` |
-| Deploy path | `~/local-print/` |
-| Virtualenv | `~/local-print/venv` (Flask 3.1.3 already installed) |
-| Launcher | `~/local-print/start.sh` |
-| Printer | CUPS queue named `my-printer` |
-| Bind address | LAN IPv4 in `10.1.2.0/24`, port `8081` |
+| Host | A Debian-family Linux box reachable over SSH (`$LOCALPRINT_HOST`) |
+| User | An unprivileged account with passwordless `sudo` (`$LOCALPRINT_USER`) |
+| Deploy path | `~/$LOCALPRINT_REMOTE_PATH/` |
+| Virtualenv | `venv/` inside the deploy path |
+| Launcher | `start.sh` inside the deploy path |
+| Printer | A CUPS queue named by `$LOCALPRINT_PRINTER` |
+| Bind address | The LAN IPv4 starting with `$LOCALPRINT_LAN_PREFIX`, on `$LOCALPRINT_PORT` |
 
-All application files are uploaded back into `~/local-print/` on `my-nas`
-as part of deployment. The existing `venv/` and `web.py.bck` on the server
+All application files are uploaded back into the deploy path as part of
+deployment. The existing `venv/` and any previous `web.py.bck` on the server
 are left untouched.
 
 ---
@@ -147,28 +151,64 @@ summary such as *"Printing 4 of 7 pages"*.
 
 ## 5. Constraints and limits
 
-| Constraint | Value | Rationale |
+Every value here is configurable per site (see §5.2); the column below
+shows the shipped example values.
+
+| Constraint | Example | Rationale |
 | --- | --- | --- |
 | Max upload size | 50 MB | Returns HTTP 413 with a friendly message |
 | Allowed PDF extension | `.pdf` | |
 | Allowed image extensions | `.jpg`, `.jpeg`, `.png` | |
 | Copies range | 1–20 | Guards against accidental paper waste |
 | `lp` timeout | 30 s | Prevents a hung CUPS call blocking a worker |
-| Bind interface | `10.1.2.x` only | Refuses to start otherwise, so the service is never accidentally exposed beyond the LAN |
+| Bind interface | The configured LAN prefix only | Refuses to start otherwise, so the service is never accidentally exposed beyond the LAN |
 
 ### 5.1 Security posture
 
 This is a LAN-only service with **no authentication** — the trust boundary
 is the home network itself. Consequently:
 
-- The server refuses to start if no `10.1.2.x` interface exists, rather
-  than falling back to `0.0.0.0`.
+- The server refuses to start if no interface matches the configured LAN
+  prefix, rather than falling back to `0.0.0.0`.
 - Uploads never keep their client-supplied filename on disk; a temporary
   name with a validated extension is used instead.
 - The page-range expression is validated against a strict regular
   expression before reaching the command line.
 - Uploaded files are deleted in a `finally` block, so they are removed even
   when printing fails.
+
+### 5.2 Configuration
+
+Everything site-specific lives in a single `localprint.conf` beside
+`app.py`, in `KEY=value` form so the app, `install.sh` and `deploy.ps1` can
+all read it. `localprint.conf.example` is committed as the template;
+`localprint.conf` itself is git-ignored.
+
+**There are no defaults.** A missing or empty setting raises `ConfigError`
+at import time with a message naming the key, so the app fails immediately
+and visibly instead of printing to the wrong queue or binding the wrong
+network. Environment variables of the same name take precedence over the
+file.
+
+Required by the app: `LOCALPRINT_PRINTER`, `LOCALPRINT_PORT`,
+`LOCALPRINT_LAN_PREFIX`, `LOCALPRINT_MAX_UPLOAD_MB`,
+`LOCALPRINT_LP_TIMEOUT_SECONDS`, `LOCALPRINT_MIN_COPIES`,
+`LOCALPRINT_MAX_COPIES`. Read by `deploy.ps1` only: `LOCALPRINT_HOST`,
+`LOCALPRINT_USER`, `LOCALPRINT_REMOTE_PATH`. Optional switches:
+`LOCALPRINT_FAKE_PRINTER`, `LOCALPRINT_DEBUG`, `LOCALPRINT_CONFIG`.
+
+Two values are validated beyond being present, because getting them wrong
+fails silently rather than loudly: `LOCALPRINT_LAN_PREFIX` must end with a
+dot (otherwise a prefix such as `10.1.2` would also match `10.1.22.x`), and
+`MAX_COPIES` must not
+be below `MIN_COPIES`.
+
+The upload limit is published to the browser through `window.LOCALPRINT`
+rather than duplicated in `app.js`, so the client-side size check cannot
+drift from what the server enforces.
+
+Accepted file extensions stay in `config.py`: they describe what the
+printing pipeline can handle, not a per-site preference.
 
 ---
 
@@ -178,7 +218,9 @@ is the home network itself. Consequently:
 local-print/
 ├── app.py                 # Flask app: routes, validation, CUPS invocation
 ├── printing.py            # Printer abstraction: builds and runs the lp command
-├── config.py              # Printer name, port, limits, extensions
+├── config.py              # Strict loader for localprint.conf; no defaults
+├── localprint.conf        # Site settings (git-ignored)
+├── localprint.conf.example# Committed template for the above
 ├── templates/
 │   └── index.html         # Jinja2 template for the print form
 ├── static/
@@ -190,7 +232,7 @@ local-print/
 ├── requirements.txt       # Flask pin
 ├── start.sh               # Launcher (venv/bin/python3 app.py)
 ├── install.sh             # Installs the systemd service (runs on the NAS)
-└── deploy.ps1             # Uploads the above to my-nas:~/local-print/
+└── deploy.ps1             # Uploads the above to the configured host
 ```
 
 Development-only files that are **not** deployed:
@@ -200,6 +242,7 @@ Development-only files that are **not** deployed:
 ├── pytest.ini             # Test discovery and the e2e marker
 └── tests/
     ├── conftest.py        # Sample documents, Flask client, live server
+    ├── test_config.py     # Config parsing, validation and the template
     ├── test_printing.py   # Page ranges and lp command construction
     ├── test_routes.py     # HTTP behaviour of the upload endpoint
     └── test_ui.py         # Browser tests driven through Playwright
@@ -216,14 +259,17 @@ invocation for a stub that logs the command it would have run and reports
 success. This makes the whole UI — including the success and error paths —
 developable on a Windows workstation with no CUPS installed.
 
-Local development also relaxes the `10.1.2.x` bind requirement so the
-server can listen on `127.0.0.1`.
+Local development also relaxes the LAN bind requirement so the server can
+listen on `127.0.0.1`.
 
 ### 6.2 Tests
 
 The suite guards the behaviour described in this document against
 regressions. It never contacts a printer: the backend tests run with
-`LOCALPRINT_FAKE_PRINTER=1`, so `lp` is never executed.
+`LOCALPRINT_FAKE_PRINTER=1`, so `lp` is never executed. They also point
+`LOCALPRINT_CONFIG` at the committed `localprint.conf.example`, so the suite
+is reproducible on any machine and never depends on the developer's own
+`localprint.conf`.
 
 ```
 pip install -r requirements-dev.txt
@@ -259,35 +305,43 @@ them a "select none" regression would silently print the whole document.
 
 `deploy.ps1` performs the upload:
 
-1. Verifies the SSH connection to `me@my-nas`.
-2. Creates `~/local-print/templates` and `~/local-print/static` if missing.
-3. Copies `app.py`, `printing.py`, `config.py`, `requirements.txt`,
-   `start.sh`, `install.sh`, `templates/*`, `static/*` via `scp`. Vendored
-   third-party bundles under `static/vendor/` are copied byte for byte, while
-   the project's own text files are normalised to LF.
+1. Reads the target host, user and remote path from `localprint.conf`, then
+   verifies the SSH connection.
+2. Creates `templates/` and `static/` under the deploy path if missing.
+3. Copies `app.py`, `printing.py`, `config.py`, `localprint.conf`,
+   `localprint.conf.example`, `requirements.txt`, `start.sh`, `install.sh`,
+   `templates/*`, `static/*` via `scp`. Vendored third-party bundles under
+   `static/vendor/` are copied byte for byte, while the project's own text
+   files are normalised to LF.
 4. Normalises line endings to LF and makes `start.sh`, `install.sh` and
    `app.py` executable.
 5. Optionally restarts the service. If the systemd unit is installed,
    `-Restart` restarts *that*; otherwise it falls back to starting a detached
    process directly, so the two never fight over the port.
 
+`localprint.conf` is deliberately part of the upload: with no defaults in
+the code, the server cannot start without it.
+
 The legacy `web.py` on the server is preserved until the new app is
 verified, then may be removed manually.
 
 ### 7.1 Running as a service
 
-`install.sh` runs **on the NAS** and registers the app with systemd so it
+`install.sh` runs **on the server** and registers the app with systemd so it
 comes back after a reboot:
 
 ```
-ssh me@my-nas 'cd ~/local-print && ./install.sh'
+ssh "$LOCALPRINT_USER@$LOCALPRINT_HOST" 'cd ~/local-print && ./install.sh'
 ```
 
-It re-runs itself under `sudo`, creates the virtualenv if missing, installs
-`requirements.txt`, writes `/etc/systemd/system/localprint.service`, enables
-it for `multi-user.target` and starts it. It is safe to re-run: it rewrites
-the unit and restarts the service. `./install.sh --uninstall` stops,
-disables and removes the unit, leaving the application files alone.
+It re-runs itself under `sudo`, checks that `localprint.conf` is present and
+complete (failing early with the offending key rather than leaving systemd
+to restart a doomed service forever), creates the virtualenv if missing,
+installs `requirements.txt`, writes
+`/etc/systemd/system/localprint.service`, enables it for
+`multi-user.target` and starts it. It is safe to re-run: it rewrites the
+unit and restarts the service. `./install.sh --uninstall` stops, disables
+and removes the unit, leaving the application files alone.
 
 The unit runs as the owner of the install directory (not root), with
 `NoNewPrivileges`, a private `/tmp` for the uploaded documents, and
@@ -295,7 +349,7 @@ The unit runs as the owner of the install directory (not root), with
 
 Two ordering details matter:
 
-- The app refuses to bind anything other than the `10.1.2.x` address, so
+- The app refuses to bind anything outside the configured LAN prefix, so
   the unit waits for `network-online.target` and additionally uses
   `Restart=always` with a 3 second delay. If the address is not configured
   yet at boot, the service simply retries until it is, rather than failing.
@@ -314,9 +368,9 @@ sudo systemctl restart localprint
 
 ## 8. Acceptance criteria
 
-1. Opening `http://<lan-ip>:8081` on a phone shows the print form with no
+1. Opening `http://<lan-ip>:<port>` on a phone shows the print form with no
    horizontal scrolling and no zoom-on-focus.
-2. Selecting a PDF and pressing Print queues a job on the `my-printer` printer
+2. Selecting a PDF and pressing Print queues a job on the configured printer
    and shows the `lp` confirmation message.
 3. Selecting a JPEG or PNG prints the image.
 4. Dragging a file onto the page selects it and switches to the correct
@@ -327,8 +381,9 @@ sudo systemctl restart localprint
 7. A 60 MB file is rejected with a readable message, not a stack trace.
 8. Disabling JavaScript still allows a print job to be submitted.
 9. The temporary upload file no longer exists after the job is queued.
-10. Running `deploy.ps1` places every file in `~/local-print/` on `my-nas`
-    and the service starts successfully from `start.sh`.
+10. Running `deploy.ps1` places every file in the configured deploy path on
+    the configured host, and the service starts successfully from
+    `start.sh`.
 11. Selecting a multi-page PDF shows one thumbnail per page and the summary
     reports the correct total.
 12. Tapping thumbnails rewrites the Pages field to the shortest equivalent
