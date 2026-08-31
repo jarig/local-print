@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+local-print.log
+.pytest_cache/
+.playwright-mcp/
+test-results/

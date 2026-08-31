@@ -1,0 +1,7 @@
+# Shell scripts run on Linux: a CRLF shebang makes them unrunnable.
+*.sh text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
+
+# Vendored bundles must never be rewritten.
+static/vendor/** binary
