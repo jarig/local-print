@@ -104,7 +104,31 @@ def respond(message, status=200, ok=False):
         max_upload_mb=config.MAX_UPLOAD_MB,
         min_copies=config.MIN_COPIES,
         max_copies=config.MAX_COPIES,
+        printer_options=printing.discover_options(),
     ), status
+
+
+def select_printer_options():
+    """Read the print options from the form, allowing only real choices.
+
+    The browser submits a keyword's *value*, never a whole `lp` option, and
+    each value has to be one the printer told us about. Nothing the client
+    sends is ever passed through to the command line unchecked.
+    """
+    chosen = {}
+
+    for option in printing.discover_options():
+        value = (request.form.get("opt_" + option["keyword"]) or "").strip()
+        if not value:
+            continue
+
+        if value not in {choice["value"] for choice in option["choices"]}:
+            raise ValueError(
+                f"{option['label']}: {value} is not supported by this printer."
+            )
+        chosen[option["keyword"]] = value
+
+    return chosen
 
 
 def parse_copies():
@@ -165,6 +189,7 @@ def index():
     try:
         copies = parse_copies()
         duplex = "duplex" in request.form
+        printer_options = select_printer_options()
         upload, suffix, pages = select_upload(mode)
 
         with tempfile.NamedTemporaryFile(
@@ -173,7 +198,9 @@ def index():
             temp_filename = tmp.name
         upload.save(temp_filename)
 
-        message = printing.submit(temp_filename, copies, duplex, pages)
+        message = printing.submit(
+            temp_filename, copies, duplex, pages, printer_options
+        )
     except ValueError as error:
         return respond(str(error), 400)
     except printing.PrintError as error:

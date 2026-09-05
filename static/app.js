@@ -616,6 +616,41 @@
         stepCopies(1);
     });
 
+    // Print options: keep the collapsed summary showing whatever differs
+    // from the printer's own defaults, so nothing surprising stays hidden.
+    var optionsBox = document.getElementById("options");
+    if (optionsBox) {
+        var optionsSummary = document.getElementById("options-summary");
+
+        var describeOptions = function () {
+            var changed = [];
+
+            optionsBox.querySelectorAll(".option-field").forEach(function (field) {
+                var dropdown = field.querySelector("select");
+                var picked = dropdown
+                    ? dropdown.selectedOptions[0]
+                    : field.querySelector("input:checked");
+
+                if (!picked || picked.dataset.default !== "no") {
+                    return;
+                }
+
+                // A radio carries no text of its own; its label does.
+                var text = dropdown
+                    ? picked.textContent
+                    : picked.closest("label").textContent;
+                changed.push(text.trim());
+            });
+
+            optionsSummary.textContent = changed.length
+                ? changed.join(" \u00b7 ")
+                : "Printer defaults";
+        };
+
+        optionsBox.addEventListener("change", describeOptions);
+        describeOptions();
+    }
+
     pagesInput.addEventListener("input", function () {
         if (validatePages()) {
             syncSelectionFromInput();

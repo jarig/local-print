@@ -108,6 +108,46 @@
             </div>
         </div>
 
+        {% if printer_options %}
+        <details class="options" id="options" open>
+            <summary>
+                <span>Print options</span>
+                <span class="options-summary" id="options-summary"></span>
+            </summary>
+
+            {% for option in printer_options %}
+            <div class="field option-field">
+                {% if option.choices|length <= 3 %}
+                    <span class="option-label" id="label-{{ option.keyword }}">{{ option.label }}</span>
+                    <div class="chips" role="radiogroup"
+                         aria-labelledby="label-{{ option.keyword }}">
+                        {% for choice in option.choices %}
+                        <label class="chip">
+                            <input type="radio" name="opt_{{ option.keyword }}"
+                                   value="{{ choice.value }}"
+                                   data-default="{{ 'yes' if choice.value == option.default else 'no' }}"
+                                   {{ 'checked' if choice.value == option.default }}>
+                            <span>{{ choice.label }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <label for="opt-{{ option.keyword }}">{{ option.label }}</label>
+                    <select id="opt-{{ option.keyword }}" name="opt_{{ option.keyword }}">
+                        {% for choice in option.choices %}
+                        <option value="{{ choice.value }}"
+                                data-default="{{ 'yes' if choice.value == option.default else 'no' }}"
+                                {{ 'selected' if choice.value == option.default }}>
+                            {{ choice.label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </details>
+        {% endif %}
+
         <button type="submit" class="submit" id="submit">
             <span class="submit-label">Print</span>
             <span class="progress" id="progress" hidden><span class="bar" id="bar"></span></span>

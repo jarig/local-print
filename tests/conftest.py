@@ -184,13 +184,14 @@ def recorded_jobs(monkeypatch):
     """Capture calls to the printer instead of queueing anything."""
     jobs = []
 
-    def fake_submit(filename, copies, duplex, pages=None):
+    def fake_submit(filename, copies, duplex, pages=None, options=None):
         jobs.append(
             {
                 "filename": filename,
                 "copies": copies,
                 "duplex": duplex,
                 "pages": pages,
+                "options": options,
                 # Recorded while the call is in flight, so tests can assert
                 # the upload exists at print time and is cleaned up after.
                 "existed": os.path.exists(filename),

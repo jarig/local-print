@@ -557,6 +557,141 @@ input:focus-visible {
     outline-offset: 2px;
 }
 
+/* Print options */
+
+.options {
+    margin-bottom: 18px;
+    background: var(--bg);
+    border-radius: 13px;
+}
+
+.options > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 0 14px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    /* The default triangle sits awkwardly next to the flex layout. */
+    list-style: none;
+}
+
+.options > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* A chevron that points down once the section is open. */
+.options > summary::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    margin-left: auto;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg);
+    transition: transform .15s;
+}
+
+.options[open] > summary::after {
+    transform: rotate(45deg);
+}
+
+.options > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 13px;
+}
+
+.options-summary {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* Redundant while the controls themselves are on screen. */
+.options[open] .options-summary {
+    display: none;
+}
+
+.option-field {
+    padding: 0 14px;
+    margin-bottom: 14px;
+}
+
+.option-field:first-of-type {
+    padding-top: 2px;
+}
+
+.option-label {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.chip {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0 12px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+}
+
+.chip input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.chip:has(input:checked) {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+    border-color: var(--accent);
+}
+
+.chip:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.option-field select {
+    width: 100%;
+    min-height: 48px;
+    padding: 11px;
+    color: var(--text);
+    /* 16px keeps iOS Safari from zooming on focus. */
+    font-size: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+
+.option-field select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
 /* Submit */
 
 .submit {

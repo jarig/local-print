@@ -335,6 +335,154 @@ def test_invalid_page_expression_is_rejected(client, recorded_jobs, pdf_bytes):
     assert not recorded_jobs
 
 
+# --------------------------------------------------------------------------
+# Printer options
+# --------------------------------------------------------------------------
+
+
+def test_the_form_offers_the_printers_own_options(client):
+    body = client.get("/").get_data(as_text=True)
+    assert 'name="opt_ColorModel"' in body
+    assert 'value="Gray"' in body
+    assert "Black &amp; white" in body
+
+
+def test_the_printers_default_is_preselected(client):
+    body = client.get("/").get_data(as_text=True)
+    colour = body[body.index('name="opt_ColorModel"'):]
+    # RGB is starred in the discovered output, so it must arrive checked.
+    assert colour[: colour.index("Gray")].count("checked") == 1
+
+
+def test_duplex_is_not_offered_as_a_printer_option(client):
+    # It has its own toggle; two controls for one setting would conflict.
+    assert 'name="opt_Duplex"' not in client.get("/").get_data(as_text=True)
+
+
+def test_a_chosen_option_reaches_the_printer(
+    client, recorded_jobs, pdf_bytes
+):
+    post(
+        client,
+        {
+            "mode": "pdf",
+            "copies": "1",
+            "opt_ColorModel": "Gray",
+            "pdf": upload("a.pdf", pdf_bytes),
+        },
+    )
+    assert recorded_jobs[0]["options"] == {"ColorModel": "Gray"}
+
+
+def test_several_options_reach_the_printer_together(
+    client, recorded_jobs, pdf_bytes
+):
+    post(
+        client,
+        {
+            "mode": "pdf",
+            "copies": "1",
+            "opt_ColorModel": "Gray",
+            "opt_cupsPrintQuality": "Draft",
+            "opt_PageSize": "A5",
+            "pdf": upload("a.pdf", pdf_bytes),
+        },
+    )
+    assert recorded_jobs[0]["options"] == {
+        "ColorModel": "Gray",
+        "cupsPrintQuality": "Draft",
+        "PageSize": "A5",
+    }
+
+
+def test_omitted_options_are_left_to_the_printer(
+    client, recorded_jobs, pdf_bytes
+):
+    post(
+        client,
+        {"mode": "pdf", "copies": "1", "pdf": upload("a.pdf", pdf_bytes)},
+    )
+    assert recorded_jobs[0]["options"] == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Sepia",             # not offered by this printer
+        "Gray extra",
+        "Gray;rm -rf /",
+        "$(reboot)",
+        "../../etc/passwd",
+    ],
+)
+def test_a_value_the_printer_never_offered_is_rejected(
+    client, recorded_jobs, pdf_bytes, value
+):
+    """The discovered choices are an allow-list.
+
+    Nothing the client sends may reach the lp command line unless the
+    printer itself reported it as a valid choice.
+    """
+    response = post(
+        client,
+        {
+            "mode": "pdf",
+            "copies": "1",
+            "opt_ColorModel": value,
+            "pdf": upload("a.pdf", pdf_bytes),
+        },
+    )
+    assert response.status_code == 400
+    assert not recorded_jobs
+
+
+def test_an_option_the_printer_does_not_have_is_ignored(
+    client, recorded_jobs, pdf_bytes
+):
+    # Only discovered keywords are read, so stray fields cannot inject flags.
+    post(
+        client,
+        {
+            "mode": "pdf",
+            "copies": "1",
+            "opt_StapleLocation": "UpperLeft",
+            "pdf": upload("a.pdf", pdf_bytes),
+        },
+    )
+    assert recorded_jobs[0]["options"] == {}
+
+
+def test_rejecting_an_option_explains_which_one(
+    client, recorded_jobs, pdf_bytes
+):
+    response = post(
+        client,
+        {
+            "mode": "pdf",
+            "copies": "1",
+            "opt_ColorModel": "Sepia",
+            "pdf": upload("a.pdf", pdf_bytes),
+        },
+        json=True,
+    )
+    assert "Colour" in response.get_json()["message"]
+
+
+def test_the_form_still_works_when_the_printer_cannot_be_queried(
+    client, recorded_jobs, pdf_bytes, monkeypatch
+):
+    import printing
+
+    monkeypatch.setattr(printing, "discover_options", lambda *a, **k: [])
+
+    assert client.get("/").status_code == 200
+    post(
+        client,
+        {"mode": "pdf", "copies": "1", "pdf": upload("a.pdf", pdf_bytes)},
+    )
+    assert len(recorded_jobs) == 1
+
+
 def test_oversized_upload_is_rejected_politely(client, recorded_jobs):
     payload = b"%PDF-1.4\n" + b"0" * (config.MAX_UPLOAD_SIZE + 1024)
     response = post(

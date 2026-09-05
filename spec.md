@@ -63,7 +63,41 @@ Only one file may be submitted per job. Submitting both is an error.
 - **Copies** — integer, 1 to 20.
 - **Double-sided** — toggles `sides=two-sided-long-edge`.
 
-### 3.3 Job submission
+### 3.3 Printer-discovered options
+
+Beyond copies and duplex, the printer decides what can be adjusted. The
+server runs `lpoptions -p <printer> -l` and offers the choices the printer
+reports for a fixed set of keywords, in this order:
+
+| Keyword | Label |
+| --- | --- |
+| `ColorModel` | Colour |
+| `cupsPrintQuality` | Quality |
+| `PageSize` | Paper size |
+| `MediaType` | Paper type |
+| `InputSlot` | Paper source |
+| `Resolution` | Resolution |
+
+Rules:
+
+- **Nothing is configured.** A mono printer simply offers no colour choice.
+- Keywords outside the list are ignored — a PPD also exposes internal knobs
+  (`PageRegion`, `OutputBin`) that mean nothing to a person.
+- `Duplex` is excluded on purpose: §3.2 already provides a dedicated toggle,
+  and two controls for one setting would disagree.
+- Groups with fewer than two choices are dropped; there is nothing to pick.
+- The choice CUPS marks with `*` is preselected, so an untouched form
+  behaves exactly like a bare `lp` invocation.
+- PPDs carry no human-readable text for individual choices, so labels are
+  derived: a small table renames the ones that matter (`Gray` →
+  *Black & white*), and the rest are tidied (`Com.canon.mtinkjeta` →
+  *Inkjeta*).
+- Discovery is cached for five minutes and never raises. If CUPS is
+  unreachable no options are offered and printing still works.
+- Submitted values are validated against the discovered choices, so the
+  browser can only request something the printer itself advertised.
+
+### 3.4 Job submission
 
 The server writes the upload to a temporary file, invokes the CUPS `lp`
 command line tool, and deletes the temporary file immediately afterwards —
@@ -72,14 +106,18 @@ nothing is retained on disk after the job is queued.
 The command is assembled as:
 
 ```
-lp -d <printer> -n <copies> [-o sides=two-sided-long-edge] [-P <pages>] -- <tempfile>
+lp -d <printer> -n <copies> [-o <Keyword>=<Choice> ...] [-o sides=two-sided-long-edge] [-P <pages>] -- <tempfile>
 ```
+
+Discovered options are emitted before `sides`, so the dedicated
+double-sided toggle wins if a printer ever exposes duplex twice — with
+`lp`, the last `-o` for a keyword takes effect.
 
 The `--` separator prevents a crafted filename from being interpreted as an
 option. Arguments are passed as a list (never through a shell), so filenames
 cannot inject commands.
 
-### 3.4 Result feedback
+### 3.5 Result feedback
 
 On success the browser is redirected back to the form with a status message
 (POST/Redirect/GET). This is deliberate: refreshing the page must never
@@ -114,6 +152,11 @@ Beyond the existing prototype, the UI adds:
   properties.
 - **Inline validation** — wrong file type, oversized file, or a malformed
   page expression is reported before the upload starts.
+- **Print options panel** — the discovered options (§3.3) sit in a
+  `<details>` disclosure. Groups of up to three choices render as tappable
+  chips; larger ones (paper sizes) become a `<select>`, which stays usable
+  on a phone. When collapsed, the summary lists whatever differs from the
+  printer's defaults, or reads "Printer defaults".
 
 ### 4.3 Progressive enhancement
 
@@ -217,7 +260,7 @@ printing pipeline can handle, not a per-site preference.
 ```
 local-print/
 ├── app.py                 # Flask app: routes, validation, CUPS invocation
-├── printing.py            # Printer abstraction: builds and runs the lp command
+├── printing.py            # Printer abstraction: discovers options, runs lp
 ├── config.py              # Strict loader for localprint.conf; no defaults
 ├── localprint.conf        # Site settings (git-ignored)
 ├── localprint.conf.example# Committed template for the above
@@ -243,6 +286,7 @@ Development-only files that are **not** deployed:
 └── tests/
     ├── conftest.py        # Sample documents, Flask client, live server
     ├── test_config.py     # Config parsing, validation and the template
+    ├── test_options.py    # lpoptions parsing, discovery and caching
     ├── test_printing.py   # Page ranges and lp command construction
     ├── test_routes.py     # HTTP behaviour of the upload endpoint
     └── test_ui.py         # Browser tests driven through Playwright
@@ -275,25 +319,32 @@ is reproducible on any machine and never depends on the developer's own
 pip install -r requirements-dev.txt
 python -m playwright install chromium
 
-python -m pytest                  # everything (~17s)
+python -m pytest                  # everything (~20s)
 python -m pytest -m "not e2e"     # backend only, no browser needed (<1s)
 ```
 
-**Backend (`test_printing.py`, `test_routes.py`)** — page-range parsing and
-its rejection cases, the exact `lp` argument list including the `--`
-separator that stops a crafted filename becoming an option, every error
-branch of the CUPS call, and the HTTP surface: rendering, uploads, option
-pass-through, copy bounds, extension checks, oversized bodies, the
-JSON-versus-redirect split, and the guarantee that the temporary upload
-exists while printing and is deleted afterwards.
+**Backend (`test_printing.py`, `test_options.py`, `test_routes.py`)** —
+page-range parsing and its rejection cases, the exact `lp` argument list
+including the `--` separator that stops a crafted filename becoming an
+option, every error branch of the CUPS call, the parsing of `lpoptions`
+output together with caching and its tolerance of an unreachable printer,
+and the HTTP surface: rendering, uploads, option pass-through, copy bounds,
+extension checks, oversized bodies, the JSON-versus-redirect split, and the
+guarantee that the temporary upload exists while printing and is deleted
+afterwards.
+
+A dedicated group of tests treats the discovered choices as an allow-list:
+a value the stubbed printer never advertised must be rejected with 400, and
+an unknown `opt_*` field must be ignored rather than forwarded.
 
 **Browser (`test_ui.py`)** — the behaviour that only exists in JavaScript,
 run against a real server in a subprocess: mobile layout at 320 px, dark
 mode, drag and drop, the mode following the dropped file's type, the PDF
 page preview and its two-way binding with the Pages field, the refusal to
-submit an empty page selection, and the no-JavaScript fallback (exercised
-by blocking `app.js` and letting the plain form POST). Every browser test
-also asserts the page produced no console errors.
+submit an empty page selection, the print options panel and its collapsed
+summary, and the no-JavaScript fallback (exercised by blocking `app.js` and
+letting the plain form POST). Every browser test also asserts the page
+produced no console errors.
 
 Because an empty page expression means *all pages* to CUPS, the tests
 covering an empty selection are load-bearing rather than cosmetic: without
@@ -390,3 +441,9 @@ sudo systemctl restart localprint
     expression, and typing an expression re-highlights the thumbnails.
 13. Deselecting every page blocks submission with a clear message instead of
     printing the entire document.
+14. The Print options panel lists exactly what `lpoptions -p <printer> -l`
+    reports for the supported keywords, with the printer's own defaults
+    preselected, and no configuration file mentions any of them.
+15. Choosing "Black & white" sends `-o ColorModel=Gray` to `lp`; a value the
+    printer never advertised is rejected with a 400.
+16. Stopping CUPS leaves the form working, with no options offered.

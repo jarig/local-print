@@ -34,6 +34,9 @@ account.
   include or exclude. The page range stays in sync with the thumbnails, and
   you can still type `1,3,5-7` by hand.
 - **Copies and double-sided** printing.
+- **Print options discovered from your printer** — colour vs. black & white,
+  quality, paper size, paper type and paper source, read straight from CUPS.
+  Nothing to configure. See [Print options](#print-options).
 - **Mobile-first** — designed for a phone, works on a desktop. Follows the
   system light/dark theme.
 - **Drag and drop** with upload progress.
@@ -201,22 +204,69 @@ Optional development switches, normally left unset:
 Accepted file types are a property of the printing pipeline rather than a
 site preference, so they stay in `config.py`.
 
+## Print options
+
+The extra controls under **Print options** are not configured anywhere. On
+each request LocalPrint asks CUPS what the printer can actually do:
+
+```bash
+lpoptions -p <printer> -l
+```
+
+Everything the printer reports for these keywords is offered, in this order:
+
+| Keyword | Shown as |
+| --- | --- |
+| `ColorModel` | Colour |
+| `cupsPrintQuality` | Quality |
+| `PageSize` | Paper size |
+| `MediaType` | Paper type |
+| `InputSlot` | Paper source |
+| `Resolution` | Resolution |
+
+So a mono laser offers no colour choice, and a photo printer offers its
+borderless paper sizes — without either being spelled out anywhere. Groups
+the printer marks with a single choice are dropped, and the choice CUPS
+starts with (`*`) is preselected, so leaving the panel alone prints exactly
+as `lp` would on its own.
+
+`Duplex` is deliberately not listed: the form already has a double-sided
+toggle, and two controls for one setting would disagree.
+
+The result is cached for five minutes. If CUPS cannot be reached the panel
+is simply empty and printing continues with the printer's own defaults.
+
+Values are validated against what was discovered, so the browser can only
+ever ask for a choice the printer itself reported.
+
+Two things follow from reading the printer directly:
+
+- Choice names come from the PPD, so they are the manufacturer's, not ours
+  (`Com.canon.mtinkjeta`). LocalPrint tidies the common ones — `Gray`
+  becomes *Black & white* — and prettifies the rest.
+- After swapping the printer or its driver, restart the service (or wait
+  five minutes) for the new options to appear.
+
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt
 python -m playwright install chromium
 
-python -m pytest                  # everything (~18s)
+python -m pytest                  # everything (~20s)
 python -m pytest -m "not e2e"     # backend only, no browser needed (<1s)
 ```
 
 - `tests/test_printing.py` — page-range parsing and the exact `lp` argument
   list, including the `--` separator that stops a crafted filename becoming
   an option.
+- `tests/test_options.py` — parsing `lpoptions` output, the choices that get
+  offered, caching, and coping with a printer that cannot be queried.
 - `tests/test_routes.py` — the HTTP surface: uploads, option pass-through,
   validation, and the guarantee that the temporary upload is deleted after
   printing.
+- `tests/test_config.py` — the config loader, including its refusal to
+  invent defaults.
 - `tests/test_ui.py` — Playwright browser tests for the parts that only
   exist in JavaScript: the page picker, drag and drop, mobile layout, dark
   mode and the no-JavaScript fallback.

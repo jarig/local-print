@@ -18,6 +18,11 @@ pytestmark = pytest.mark.e2e
 
 PHONE = {"width": 390, "height": 844}
 
+# The stubbed printer always reports a colour choice, so it is the handiest
+# option to drive in tests.
+COLOUR = 'input[name="opt_ColorModel"][value="RGB"]'
+GRAY = 'input[name="opt_ColorModel"][value="Gray"]'
+
 
 # --------------------------------------------------------------------------
 # Fixtures
@@ -414,6 +419,62 @@ def test_duplex_can_be_toggled(page):
     expect(page.locator("#duplex")).not_to_be_checked()
     page.click("label:has(#duplex)")
     expect(page.locator("#duplex")).to_be_checked()
+
+
+# --------------------------------------------------------------------------
+# Printer options
+# --------------------------------------------------------------------------
+
+
+def test_the_printers_options_are_shown(page):
+    expect(page.locator("#options")).to_be_visible()
+    expect(page.locator(f"label:has({GRAY})")).to_contain_text("Black & white")
+
+
+def test_the_printers_defaults_start_selected(page):
+    expect(page.locator(COLOUR)).to_be_checked()
+    expect(page.locator(GRAY)).not_to_be_checked()
+
+
+def test_choosing_black_and_white_sticks(page):
+    page.click(f"label:has({GRAY})")
+    expect(page.locator(GRAY)).to_be_checked()
+    expect(page.locator(COLOUR)).not_to_be_checked()
+
+
+def test_collapsed_options_say_printer_defaults(page):
+    page.click("#options > summary")
+    expect(page.locator("#options-summary")).to_have_text("Printer defaults")
+
+
+def test_collapsed_options_summarise_the_changes(page):
+    page.click(f"label:has({GRAY})")
+    page.select_option('select[name="opt_PageSize"]', "A5")
+    page.click("#options > summary")
+
+    summary = page.locator("#options-summary")
+    expect(summary).to_contain_text("Black & white")
+    expect(summary).to_contain_text("A5")
+
+
+def test_the_summary_ignores_untouched_options(page):
+    # Only what the user actually changed is worth reporting.
+    page.click(f"label:has({GRAY})")
+    page.click("#options > summary")
+    expect(page.locator("#options-summary")).to_have_text("Black & white")
+
+
+def test_a_chosen_option_is_sent_when_printing(page, sample_files):
+    page.click(f"label:has({GRAY})")
+    select_pdf(page, sample_files["pdf1"], pages=1)
+    page.click("#submit")
+    expect(page.locator("#live-message")).to_contain_text("request id")
+
+
+def test_options_survive_a_mode_switch(page):
+    page.click(f"label:has({GRAY})")
+    page.click("label:has(#mode-image)")
+    expect(page.locator(GRAY)).to_be_checked()
 
 
 # --------------------------------------------------------------------------
