@@ -359,6 +359,23 @@ def test_duplex_is_not_offered_as_a_printer_option(client):
     assert 'name="opt_Duplex"' not in client.get("/").get_data(as_text=True)
 
 
+def test_the_options_panel_starts_collapsed(client):
+    body = client.get("/").get_data(as_text=True)
+    panel = body[body.index('<details class="options"'):]
+    assert " open>" not in panel[: panel.index(">") + 1]
+    # Collapsed, it must still say something useful without JavaScript.
+    assert "Printer defaults" in body
+
+
+def test_paper_type_starts_on_auto(client, recorded_jobs, pdf_bytes):
+    body = client.get("/").get_data(as_text=True)
+    media = body[body.index('name="opt_MediaType"'):]
+    chosen = media[: media.index("</select>")]
+    assert 'value="Auto"' in chosen
+    selected = chosen[chosen.index('value="Auto"'):]
+    assert "selected" in selected[: selected.index("</option>")]
+
+
 def test_a_chosen_option_reaches_the_printer(
     client, recorded_jobs, pdf_bytes
 ):

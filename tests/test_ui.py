@@ -426,28 +426,54 @@ def test_duplex_can_be_toggled(page):
 # --------------------------------------------------------------------------
 
 
+def open_options(page):
+    """The panel starts collapsed, so most tests have to open it first."""
+    page.click("#options > summary")
+    expect(page.locator("#options")).to_have_attribute("open", "")
+
+
+def test_options_start_collapsed(page):
+    # Printing is usually "pick a file, press Print"; the extras stay out of
+    # the way until they are wanted.
+    expect(page.locator("#options")).not_to_have_attribute("open", "")
+    expect(page.locator(GRAY)).to_be_hidden()
+
+
+def test_the_collapsed_panel_says_printer_defaults(page):
+    expect(page.locator("#options-summary")).to_have_text("Printer defaults")
+
+
+def test_the_panel_opens_on_tap(page):
+    open_options(page)
+    expect(page.locator(f"label:has({GRAY})")).to_be_visible()
+
+
 def test_the_printers_options_are_shown(page):
-    expect(page.locator("#options")).to_be_visible()
+    open_options(page)
     expect(page.locator(f"label:has({GRAY})")).to_contain_text("Black & white")
 
 
 def test_the_printers_defaults_start_selected(page):
+    open_options(page)
     expect(page.locator(COLOUR)).to_be_checked()
     expect(page.locator(GRAY)).not_to_be_checked()
 
 
+def test_paper_type_starts_on_auto(page):
+    # The stubbed printer defaults to a specific stock; Auto is better.
+    open_options(page)
+    assert page.input_value('select[name="opt_MediaType"]') == "Auto"
+
+
 def test_choosing_black_and_white_sticks(page):
+    open_options(page)
     page.click(f"label:has({GRAY})")
     expect(page.locator(GRAY)).to_be_checked()
     expect(page.locator(COLOUR)).not_to_be_checked()
 
 
-def test_collapsed_options_say_printer_defaults(page):
-    page.click("#options > summary")
-    expect(page.locator("#options-summary")).to_have_text("Printer defaults")
-
-
 def test_collapsed_options_summarise_the_changes(page):
+    open_options(page)
     page.click(f"label:has({GRAY})")
     page.select_option('select[name="opt_PageSize"]', "A5")
     page.click("#options > summary")
@@ -459,12 +485,14 @@ def test_collapsed_options_summarise_the_changes(page):
 
 def test_the_summary_ignores_untouched_options(page):
     # Only what the user actually changed is worth reporting.
+    open_options(page)
     page.click(f"label:has({GRAY})")
     page.click("#options > summary")
     expect(page.locator("#options-summary")).to_have_text("Black & white")
 
 
 def test_a_chosen_option_is_sent_when_printing(page, sample_files):
+    open_options(page)
     page.click(f"label:has({GRAY})")
     select_pdf(page, sample_files["pdf1"], pages=1)
     page.click("#submit")
@@ -472,9 +500,21 @@ def test_a_chosen_option_is_sent_when_printing(page, sample_files):
 
 
 def test_options_survive_a_mode_switch(page):
+    open_options(page)
     page.click(f"label:has({GRAY})")
     page.click("label:has(#mode-image)")
     expect(page.locator(GRAY)).to_be_checked()
+
+
+def test_a_collapsed_panel_still_sends_its_options(page, sample_files):
+    # The fields are hidden, not disabled, so they must still be submitted.
+    open_options(page)
+    page.click(f"label:has({GRAY})")
+    page.click("#options > summary")
+
+    select_pdf(page, sample_files["pdf1"], pages=1)
+    page.click("#submit")
+    expect(page.locator("#live-message")).to_contain_text("request id")
 
 
 # --------------------------------------------------------------------------

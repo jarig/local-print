@@ -86,8 +86,10 @@ Rules:
 - `Duplex` is excluded on purpose: §3.2 already provides a dedicated toggle,
   and two controls for one setting would disagree.
 - Groups with fewer than two choices are dropped; there is nothing to pick.
-- The choice CUPS marks with `*` is preselected, so an untouched form
-  behaves exactly like a bare `lp` invocation.
+- The choice CUPS marks with `*` is preselected, with one exception: when
+  the printer offers an automatic paper type (`Auto`, `AutoDetect`,
+  `Automatic`) that is preselected instead. PPDs tend to default to one
+  specific stock, and the driver guesses better than a fixed pick.
 - PPDs carry no human-readable text for individual choices, so labels are
   derived: a small table renames the ones that matter (`Gray` →
   *Black & white*), and the rest are tidied (`Com.canon.mtinkjeta` →
@@ -153,10 +155,12 @@ Beyond the existing prototype, the UI adds:
 - **Inline validation** — wrong file type, oversized file, or a malformed
   page expression is reported before the upload starts.
 - **Print options panel** — the discovered options (§3.3) sit in a
-  `<details>` disclosure. Groups of up to three choices render as tappable
-  chips; larger ones (paper sizes) become a `<select>`, which stays usable
-  on a phone. When collapsed, the summary lists whatever differs from the
-  printer's defaults, or reads "Printer defaults".
+  `<details>` disclosure that starts **collapsed**, since the common case is
+  "choose a file, press Print". Groups of up to three choices render as
+  tappable chips; larger ones (paper sizes) become a `<select>`, which stays
+  usable on a phone. The summary line lists whatever differs from the
+  defaults, or reads "Printer defaults". The fields are hidden rather than
+  disabled while collapsed, so they are still submitted.
 
 ### 4.3 Progressive enhancement
 
@@ -441,9 +445,12 @@ sudo systemctl restart localprint
     expression, and typing an expression re-highlights the thumbnails.
 13. Deselecting every page blocks submission with a clear message instead of
     printing the entire document.
-14. The Print options panel lists exactly what `lpoptions -p <printer> -l`
-    reports for the supported keywords, with the printer's own defaults
-    preselected, and no configuration file mentions any of them.
-15. Choosing "Black & white" sends `-o ColorModel=Gray` to `lp`; a value the
+14. The Print options panel starts collapsed and lists exactly what
+    `lpoptions -p <printer> -l` reports for the supported keywords, with the
+    printer's own defaults preselected, and no configuration file mentions
+    any of them.
+15. Where the printer offers an automatic paper type, that is what the form
+    starts on rather than the PPD's chosen stock.
+16. Choosing "Black & white" sends `-o ColorModel=Gray` to `lp`; a value the
     printer never advertised is rejected with a 400.
-16. Stopping CUPS leaves the form working, with no options offered.
+17. Stopping CUPS leaves the form working, with no options offered.

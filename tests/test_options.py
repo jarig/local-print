@@ -9,7 +9,7 @@ import printing
 
 REAL_CANON_OUTPUT = """PageSize/Media Size: 3.5x5 4x6 4x6.Borderless *A4 A5 B5 Legal Letter Custom.WIDTHxHEIGHT
 InputSlot/Media Source: *Auto Main Rear
-MediaType/Media Type: Com.canon.mtglossy *Com.canon.mtinkjeta Com.canon.mthagaki Envelope
+MediaType/Media Type: Com.canon.mtglossy *Com.canon.mtinkjeta Com.canon.mthagaki Envelope Stationery Auto
 cupsPrintQuality/cupsPrintQuality: Draft *Normal High
 ColorModel/Output Mode: *RGB Gray
 Duplex/Duplex: *None DuplexNoTumble DuplexTumble
@@ -147,6 +147,51 @@ def test_discovery_labels_the_groups_and_the_choices(fake_lpoptions):
 def test_unknown_groups_are_ignored(fake_lpoptions):
     fake_lpoptions("StapleLocation/Staple: *None UpperLeft\n")
     assert printing.discover_options() == []
+
+
+# --------------------------------------------------------------------------
+# Preferred defaults
+# --------------------------------------------------------------------------
+
+
+def media_type(options):
+    return next(o for o in options if o["keyword"] == "MediaType")
+
+
+def test_paper_type_prefers_auto_over_the_printers_own_default(fake_lpoptions):
+    # The Canon PPD starts on a specific stock; letting the driver work it
+    # out is a better default for someone printing from a phone.
+    fake_lpoptions(REAL_CANON_OUTPUT)
+    assert media_type(printing.discover_options())["default"] == "Auto"
+
+
+def test_preferring_auto_does_not_remove_the_other_choices(fake_lpoptions):
+    fake_lpoptions(REAL_CANON_OUTPUT)
+    values = [c["value"] for c in media_type(printing.discover_options())["choices"]]
+    assert "Com.canon.mtinkjeta" in values
+    assert "Auto" in values
+
+
+def test_paper_type_keeps_the_printers_default_when_auto_is_absent(
+    fake_lpoptions,
+):
+    fake_lpoptions(
+        "MediaType/Media Type: Plain *Glossy Envelope\n"
+    )
+    assert media_type(printing.discover_options())["default"] == "Glossy"
+
+
+@pytest.mark.parametrize("spelling", ["Auto", "AutoDetect", "Automatic"])
+def test_the_common_spellings_of_auto_are_recognised(fake_lpoptions, spelling):
+    fake_lpoptions(f"MediaType/Media Type: Plain *Glossy {spelling}\n")
+    assert media_type(printing.discover_options())["default"] == spelling
+
+
+def test_other_groups_keep_the_printers_default(fake_lpoptions):
+    # InputSlot also has an Auto, but its PPD default is already sensible
+    # and no preference is declared for it.
+    fake_lpoptions("PageSize/Media Size: A4 *Letter Auto\n")
+    assert printing.discover_options()[0]["default"] == "Letter"
 
 
 def test_the_result_is_cached(monkeypatch):

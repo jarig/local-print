@@ -227,8 +227,15 @@ Everything the printer reports for these keywords is offered, in this order:
 So a mono laser offers no colour choice, and a photo printer offers its
 borderless paper sizes — without either being spelled out anywhere. Groups
 the printer marks with a single choice are dropped, and the choice CUPS
-starts with (`*`) is preselected, so leaving the panel alone prints exactly
-as `lp` would on its own.
+starts with (`*`) is preselected.
+
+Paper type is the one exception: if the printer offers an **Auto** setting
+it wins, because PPDs tend to default to one specific stock (Canon starts
+on `Com.canon.mtinkjeta`) and the driver guesses better than a fixed pick.
+
+The panel starts **collapsed** — printing is normally "choose a file, press
+Print" — and its summary line lists whatever differs from the defaults, or
+reads "Printer defaults".
 
 `Duplex` is deliberately not listed: the form already has a double-sided
 toggle, and two controls for one setting would disagree.

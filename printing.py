@@ -69,15 +69,27 @@ CHOICE_LABELS = {
 # Canon and friends prefix their media types, e.g. Com.canon.mtinkjeta.
 VENDOR_PREFIX = re.compile(r"^Com\.[A-Za-z0-9]+\.(?:mt)?")
 
+# A printer's own default is normally the right thing to preselect, but paper
+# type is an exception: PPDs tend to default to a specific stock (Canon picks
+# Com.canon.mtinkjeta), while every driver that offers an automatic setting
+# does a better job of guessing than we can. Prefer it when it exists.
+PREFERRED_DEFAULTS = {
+    "MediaType": ("Auto", "AutoDetect", "Automatic"),
+}
+
 # Discovery costs a subprocess call, so hold the answer for a while. A
 # printer's capabilities change about as often as the printer does.
 CACHE_SECONDS = 300
 
 _cache = {"at": 0.0, "options": None}
 
-# Stands in for a real printer during development and in the test suite.
+# Stands in for a real printer during development and in the test suite. It
+# mimics the awkward parts of a real PPD: vendor-prefixed media types whose
+# default is a specific stock rather than Auto, a group with a single choice,
+# and one group large enough to need a dropdown.
 FAKE_OPTIONS = """PageSize/Media Size: *A4 A5 Letter Legal 4x6 Custom.WIDTHxHEIGHT
 InputSlot/Media Source: *Auto Main Rear
+MediaType/Media Type: Com.example.mtglossy *Com.example.mtplain Envelope Auto
 cupsPrintQuality/cupsPrintQuality: Draft *Normal High
 ColorModel/Output Mode: *RGB Gray
 Duplex/Duplex: *None DuplexNoTumble DuplexTumble
@@ -95,6 +107,18 @@ def label_for_choice(keyword, value):
     if not text:
         return value
     return text[0].upper() + text[1:]
+
+
+def preferred_default(keyword, found):
+    """Which choice to start on, which is not always the printer's own.
+
+    Falls back to the printer's default whenever no preference applies, so
+    an untouched form still behaves like a bare `lp` invocation.
+    """
+    for candidate in PREFERRED_DEFAULTS.get(keyword, ()):
+        if candidate in found["choices"]:
+            return candidate
+    return found["default"]
 
 
 def parse_options(text):
@@ -177,7 +201,7 @@ def discover_options(refresh=False):
             {
                 "keyword": keyword,
                 "label": label,
-                "default": found["default"],
+                "default": preferred_default(keyword, found),
                 "choices": [
                     {"value": value, "label": label_for_choice(keyword, value)}
                     for value in found["choices"]
