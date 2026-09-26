@@ -105,6 +105,7 @@ def respond(message, status=200, ok=False):
         min_copies=config.MIN_COPIES,
         max_copies=config.MAX_COPIES,
         printer_options=printing.discover_options(),
+        queue=printing.queue_status(),
     ), status
 
 
@@ -215,6 +216,28 @@ def index():
         return jsonify(ok=True, message=message)
 
     # Post/redirect/get so a refresh never reprints the job.
+    return redirect(url_for("index", message=message))
+
+
+@app.route("/queue")
+def queue():
+    """The queue's current state, for the status line to poll."""
+    return jsonify(printing.queue_status())
+
+
+@app.route("/queue/clear", methods=["POST"])
+def clear_queue():
+    """Discard everything waiting and restart a stopped queue."""
+    try:
+        message = printing.clear_queue()
+    except printing.PrintError as error:
+        return respond(str(error), 500)
+
+    if wants_json():
+        return jsonify(
+            ok=True, message=message, queue=printing.queue_status()
+        )
+
     return redirect(url_for("index", message=message))
 
 

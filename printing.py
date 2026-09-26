@@ -4,7 +4,9 @@ Print options (colour mode, quality, paper) are not configured anywhere:
 they are discovered from the printer itself with `lpoptions -l`, so the UI
 offers exactly what this printer can actually do.
 """
+import os
 import re
+import shutil
 import subprocess
 import time
 
@@ -251,6 +253,9 @@ def submit(filename, copies, duplex, pages=None, options=None):
 
     if config.FAKE_PRINTER:
         print("[fake printer] " + " ".join(command))
+        # Keep the fake queue honest, so the status panel and the clear
+        # button can be exercised without a printer.
+        FAKE_QUEUE["jobs"] += 1
         return (
             f"request id is {config.PRINTER}-000 ({copies} file(s)) "
             "[simulated - fake printer mode]"
@@ -279,3 +284,171 @@ def submit(filename, copies, duplex, pages=None, options=None):
         raise PrintError(f"Print failed: {details}")
 
     return result.stdout.strip() or "Print job submitted successfully."
+
+
+# --------------------------------------------------------------------------
+# Queue health
+# --------------------------------------------------------------------------
+#
+# CUPS stops a queue when a backend reports a failure, and nothing brings it
+# back automatically. A stopped queue still *accepts* jobs, so `lp` keeps
+# succeeding and every print silently piles up unseen. Reading the queue back
+# is what makes that failure visible, and clearing it is what undoes it.
+
+# `lpstat -p` describes the queue in one sentence:
+#     printer NAME is idle.  enabled since Fri 01 Jan 2027 10:00:00
+#     printer NAME disabled since Fri 01 Jan 2027 10:00:00 -
+#             Unable to send raster data to the driver.
+DISABLED_STATE = re.compile(r"\bdisabled since\b", re.IGNORECASE)
+
+# `lpstat -o` lists one job per line, starting with NAME-NUMBER.
+JOB_LINE = re.compile(r"^\S+-\d+\s+\S+\s+\d+")
+
+# Stands in for a real queue in fake-printer mode. Tests mutate it to
+# rehearse the stuck queue this exists for.
+FAKE_QUEUE = {"enabled": True, "jobs": 0, "reason": ""}
+
+# `cupsenable` and `cupsaccept` live in sbin, which is not on a service
+# user's PATH on Debian, so they cannot simply be named.
+SBIN_DIRECTORIES = ("/usr/sbin", "/usr/local/sbin", "/sbin")
+
+
+def _tool(name):
+    """Absolute path to a CUPS command, looking in sbin as well as PATH."""
+    found = shutil.which(name)
+    if found:
+        return found
+
+    for directory in SBIN_DIRECTORIES:
+        # Joined by hand: these are POSIX locations whatever the host
+        # running the test suite happens to use as a separator.
+        candidate = directory + "/" + name
+        if os.access(candidate, os.X_OK):
+            return candidate
+
+    # Nothing found: hand back the bare name so the eventual error names it.
+    return name
+
+
+def parse_queue_status(printer_text, jobs_text):
+    """Turn `lpstat -p` and `lpstat -o` output into a queue summary."""
+    # The reason for a stop is wrapped onto its own indented line, so the
+    # whole description has to be flattened before it can be split.
+    description = " ".join(printer_text.split())
+
+    reason = ""
+    _, separator, trailing = description.partition(" - ")
+    if separator:
+        reason = trailing.strip()
+
+    return {
+        "enabled": not DISABLED_STATE.search(description),
+        "jobs": sum(
+            1
+            for line in jobs_text.splitlines()
+            if JOB_LINE.match(line.strip())
+        ),
+        "reason": reason,
+    }
+
+
+def _read_queue(argument):
+    result = subprocess.run(
+        ["lpstat", argument, config.PRINTER],
+        capture_output=True,
+        text=True,
+        timeout=config.LP_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return result.stdout
+
+
+def queue_status():
+    """How the queue is doing, ready for the template.
+
+    Never raises: a status the page cannot read must not take down the page
+    that would let someone fix it. `known` says whether to trust the rest.
+    """
+    if config.FAKE_PRINTER:
+        return dict(FAKE_QUEUE, known=True)
+
+    try:
+        status = parse_queue_status(_read_queue("-p"), _read_queue("-o"))
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"[localprint] could not read the print queue: {error}")
+        return {"enabled": True, "jobs": 0, "reason": "", "known": False}
+
+    status["known"] = True
+    return status
+
+
+def _run_admin(command):
+    """Run one CUPS admin command, returning an error string or None."""
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=config.LP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        return f"{command[0]} was not found. Is CUPS installed?"
+    except subprocess.TimeoutExpired:
+        return f"{command[0]} timed out while contacting CUPS."
+    except OSError as error:
+        return f"{command[0]} could not be run: {error}"
+
+    if result.returncode == 0:
+        return None
+    return result.stderr.strip() or result.stdout.strip() or (
+        f"{command[0]} failed with status {result.returncode}."
+    )
+
+
+def clear_queue():
+    """Cancel everything waiting and bring a stopped queue back to life.
+
+    Both halves matter. Cancelling alone leaves a stopped queue stopped, so
+    the next job would be swallowed exactly like the ones just discarded.
+
+    These commands need CUPS administrative rights, which the service gets
+    from membership of the `lpadmin` group rather than from sudo -- the unit
+    sets NoNewPrivileges, so escalation is not available to it anyway.
+    """
+    if config.FAKE_PRINTER:
+        cancelled = FAKE_QUEUE["jobs"]
+        FAKE_QUEUE.update(enabled=True, jobs=0, reason="")
+        return _clear_message(cancelled)
+
+    waiting = queue_status()["jobs"]
+
+    failures = []
+    for command in (
+        # Nothing to cancel is not a failure, so this stays tolerant.
+        [_tool("cancel"), "-a", config.PRINTER],
+        [_tool("cupsenable"), config.PRINTER],
+        [_tool("cupsaccept"), config.PRINTER],
+    ):
+        error = _run_admin(command)
+        if error:
+            failures.append(error)
+
+    if failures:
+        raise PrintError(
+            "Could not clear the queue: "
+            + " ".join(failures)
+            + " The print user may not be in the 'lpadmin' group -- "
+            "re-run install.sh to fix that."
+        )
+
+    return _clear_message(waiting)
+
+
+def _clear_message(cancelled):
+    if cancelled:
+        return (
+            f"Queue cleared: {cancelled} job(s) cancelled, "
+            "the printer is ready again."
+        )
+    return "Queue was empty. The printer is ready."

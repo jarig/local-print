@@ -14,7 +14,8 @@
     <header class="head">
         <h1>Print</h1>
         <p class="printer">
-            <span class="dot" aria-hidden="true"></span>
+            <span class="dot{{ ' dot-stopped' if queue.known and not queue.enabled }}"
+                  id="printer-dot" aria-hidden="true"></span>
             {{ printer }}
         </p>
     </header>
@@ -25,6 +26,30 @@
         </div>
     {% endif %}
     <div id="live-message" class="message" role="status" hidden></div>
+
+    {# A stopped queue keeps accepting jobs it will never print, so it has to
+       be shown rather than waited on. Its own form: nesting it in the print
+       form would be invalid and would submit the wrong thing. #}
+    <form method="post" action="{{ url_for('clear_queue') }}"
+          class="queue{{ ' queue-stopped' if queue.known and not queue.enabled }}"
+          id="queue-panel"
+          {{ 'hidden' if not (queue.known and (not queue.enabled or queue.jobs)) }}>
+        <div class="queue-text">
+            <p class="queue-state" id="queue-state">
+                {%- if not queue.enabled -%}
+                    Printer stopped
+                    {%- if queue.jobs %} &middot; {{ queue.jobs }} job{{ 's' if queue.jobs != 1 }} stuck{% endif -%}
+                {%- else -%}
+                    {{ queue.jobs }} job{{ 's' if queue.jobs != 1 }} waiting
+                {%- endif -%}
+            </p>
+            <p class="queue-reason hint" id="queue-reason"
+               {{ 'hidden' if not queue.reason }}>{{ queue.reason }}</p>
+        </div>
+        <button type="submit" class="queue-clear" id="clear-queue">
+            Clear queue
+        </button>
+    </form>
 
     <form method="post" enctype="multipart/form-data" id="print-form">
         <div class="mode" role="radiogroup" aria-label="Print mode">
@@ -159,6 +184,7 @@
     window.LOCALPRINT = {
         pdfLib: "{{ url_for('static', filename='vendor/pdf.min.js') }}",
         pdfWorker: "{{ url_for('static', filename='vendor/pdf.worker.min.js') }}",
+        queueUrl: "{{ url_for('queue') }}",
         maxUploadMb: {{ max_upload_mb }}
     };
 </script>

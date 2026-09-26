@@ -37,6 +37,9 @@ account.
 - **Print options discovered from your printer** — colour vs. black & white,
   quality, paper size, paper type and paper source, read straight from CUPS.
   Nothing to configure. See [Print options](#print-options).
+- **Queue status and a Clear queue button** — a stopped printer is shown
+  instead of silently swallowing jobs. See [When nothing
+  prints](#when-nothing-prints).
 - **Mobile-first** — designed for a phone, works on a desktop. Follows the
   system light/dark theme.
 - **Drag and drop** with upload progress.
@@ -253,6 +256,53 @@ Two things follow from reading the printer directly:
   becomes *Black & white* — and prettifies the rest.
 - After swapping the printer or its driver, restart the service (or wait
   five minutes) for the new options to appear.
+
+## When nothing prints
+
+CUPS stops a queue when the printer fails mid-job — a dropped Wi-Fi
+connection is enough — and it never restarts it on its own. A stopped queue
+still *accepts* jobs, so `lp` keeps reporting success and every print piles
+up unseen. This is the most likely reason nothing comes out.
+
+LocalPrint makes that visible. The dot beside the printer name turns red and
+a panel appears above the form giving the state, the reason CUPS recorded,
+and how many jobs are waiting:
+
+> **Printer stopped · 8 jobs stuck**
+> Unable to send raster data to the driver.
+
+**Clear queue** cancels everything waiting and restarts the printer. Both
+halves matter: cancelling alone would leave the queue stopped, so the next
+job would vanish exactly like the ones just discarded.
+
+The panel hides itself when there is nothing waiting and the printer is
+running, and it works without JavaScript.
+
+### Permissions
+
+Cancelling other people's jobs and restarting a printer are CUPS
+administrative operations, limited to its `SystemGroup` (`lpadmin` on
+Debian). `install.sh` adds the service user to that group, which is enough
+over the local socket — no password, and no `sudo`, which the service could
+not use anyway because its unit sets `NoNewPrivileges`.
+
+If you installed by hand, grant it yourself and restart the service:
+
+```bash
+sudo usermod -aG lpadmin "$USER"
+sudo systemctl restart localprint
+```
+
+Without it the button reports `Forbidden` and says so.
+
+You can always fall back to the command line:
+
+```bash
+lpstat -p              # is the queue stopped, and why?
+lpstat -o              # what is waiting
+sudo cancel -a <printer>
+sudo cupsenable <printer>
+```
 
 ## Tests
 

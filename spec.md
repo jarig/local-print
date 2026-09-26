@@ -126,6 +126,41 @@ On success the browser is redirected back to the form with a status message
 re-submit a print job. Failures re-render the form with an error message and
 an appropriate HTTP status code.
 
+A queued job is not a printed one, so the message alone is not the whole
+answer — see §3.6.
+
+### 3.6 Queue health
+
+CUPS stops a queue when a backend reports a failure and never restarts it by
+itself. A stopped queue keeps *accepting* jobs, so `lp` still succeeds and
+work piles up with nothing printed and nothing complaining. This is the most
+likely cause of "it is not printing", and left to itself it is invisible.
+
+The server therefore reads the queue back with `lpstat -p` (running or
+stopped, plus the reason CUPS recorded) and `lpstat -o` (how many jobs are
+waiting), and reports:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | False when CUPS has stopped the queue |
+| `jobs` | How many jobs are waiting |
+| `reason` | Why CUPS stopped it, unwrapped onto one line |
+| `known` | False when the queue could not be read at all |
+
+`known` matters: not knowing is not the same as being broken, and an
+unreadable queue must never raise an alarm. Reading the queue never raises —
+a status panel that fails must not take down the page that would fix it.
+
+Clearing runs `cancel -a`, then `cupsenable`, then `cupsaccept`. All three
+are needed: cancelling alone leaves the queue stopped, so the next job would
+be swallowed exactly like the ones just discarded.
+
+These are CUPS administrative operations, restricted to its `SystemGroup`.
+The service gets them from membership of `lpadmin`, granted by `install.sh`,
+which is sufficient over the local socket without a password. `sudo` is
+deliberately not used — the systemd unit sets `NoNewPrivileges`, so the
+service cannot escalate even if asked to.
+
 ---
 
 ## 4. Web UI requirements
@@ -264,7 +299,8 @@ printing pipeline can handle, not a per-site preference.
 ```
 local-print/
 ├── app.py                 # Flask app: routes, validation, CUPS invocation
-├── printing.py            # Printer abstraction: discovers options, runs lp
+├── printing.py            # Printer abstraction: discovers options, runs lp,
+│                          # reads and clears the queue
 ├── config.py              # Strict loader for localprint.conf; no defaults
 ├── localprint.conf        # Site settings (git-ignored)
 ├── localprint.conf.example# Committed template for the above
@@ -292,6 +328,7 @@ Development-only files that are **not** deployed:
     ├── test_config.py     # Config parsing, validation and the template
     ├── test_options.py    # lpoptions parsing, discovery and caching
     ├── test_printing.py   # Page ranges and lp command construction
+    ├── test_queue.py      # Queue status parsing and clearing a stuck queue
     ├── test_routes.py     # HTTP behaviour of the upload endpoint
     └── test_ui.py         # Browser tests driven through Playwright
 ```
@@ -454,3 +491,10 @@ sudo systemctl restart localprint
 16. Choosing "Black & white" sends `-o ColorModel=Gray` to `lp`; a value the
     printer never advertised is rejected with a 400.
 17. Stopping CUPS leaves the form working, with no options offered.
+18. Stopping the queue (`cupsdisable <printer>`) turns the status dot red
+    and shows the state, the reason CUPS recorded, and the number of jobs
+    waiting — rather than reporting each new job as printed.
+19. Pressing Clear queue discards the waiting jobs and leaves the printer
+    enabled and accepting, so the next job prints; the panel then hides
+    itself. It works without JavaScript.
+20. A queue that cannot be read at all raises no alarm.

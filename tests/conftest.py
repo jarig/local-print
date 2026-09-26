@@ -168,11 +168,19 @@ def sample_files(tmp_path_factory):
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def fresh_fake_queue():
+    """The fake queue is module state, so give every test an empty one."""
+    empty = {"enabled": True, "jobs": 0, "reason": ""}
+    printing.FAKE_QUEUE.update(empty)
+    yield
+    printing.FAKE_QUEUE.update(empty)
+
+
 @pytest.fixture
 def flask_app():
     app_module.app.config.update(TESTING=True)
     return app_module.app
-
 
 @pytest.fixture
 def client(flask_app):

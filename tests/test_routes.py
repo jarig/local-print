@@ -5,6 +5,7 @@ import os
 import pytest
 
 import config
+import printing
 
 JSON_HEADERS = {"X-Requested-With": "LocalPrint"}
 
@@ -591,3 +592,123 @@ def test_xhr_oversized_upload_returns_json(client):
 
     assert response.status_code == 413
     assert response.get_json()["ok"] is False
+
+# --------------------------------------------------------------------------
+# Queue status and clearing
+# --------------------------------------------------------------------------
+
+
+def test_queue_status_is_available_as_json(client):
+    response = client.get("/queue")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "enabled": True,
+        "jobs": 0,
+        "reason": "",
+        "known": True,
+    }
+
+
+def test_a_healthy_queue_hides_the_panel(client):
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'id="queue-panel"' in body
+    assert "hidden" in body.split('id="queue-panel"')[1].split(">")[0]
+
+
+def test_a_stopped_queue_shows_the_panel(client):
+    printing.FAKE_QUEUE.update(
+        enabled=False, jobs=3, reason="Unable to send raster data."
+    )
+    body = client.get("/").get_data(as_text=True)
+    panel = body.split('id="queue-panel"')[1].split(">")[0]
+
+    assert "hidden" not in panel
+    assert "Printer stopped" in body
+    assert "3 jobs stuck" in body
+    assert "Unable to send raster data." in body
+
+
+def test_a_stopped_queue_turns_the_status_dot_red(client):
+    printing.FAKE_QUEUE.update(enabled=False)
+    assert "dot-stopped" in client.get("/").get_data(as_text=True)
+
+
+def test_a_healthy_queue_leaves_the_status_dot_alone(client):
+    assert "dot-stopped" not in client.get("/").get_data(as_text=True)
+
+
+def test_waiting_jobs_alone_show_the_panel(client):
+    printing.FAKE_QUEUE.update(jobs=1)
+    body = client.get("/").get_data(as_text=True)
+
+    assert "1 job waiting" in body
+    assert "hidden" not in body.split('id="queue-panel"')[1].split(">")[0]
+
+
+def test_an_unreadable_queue_stays_quiet(client, monkeypatch):
+    # Not knowing is not the same as being broken.
+    monkeypatch.setattr(
+        printing,
+        "queue_status",
+        lambda: {"enabled": True, "jobs": 0, "reason": "", "known": False},
+    )
+    body = client.get("/").get_data(as_text=True)
+
+    assert "hidden" in body.split('id="queue-panel"')[1].split(">")[0]
+    assert "dot-stopped" not in body
+
+
+def test_clearing_the_queue_cancels_and_restarts_it(client):
+    printing.FAKE_QUEUE.update(enabled=False, jobs=2, reason="Stopped")
+
+    response = client.post("/queue/clear")
+
+    assert response.status_code == 302
+    assert printing.FAKE_QUEUE == {"enabled": True, "jobs": 0, "reason": ""}
+
+
+def test_clearing_redirects_so_a_refresh_does_not_repeat_it(client):
+    response = client.post("/queue/clear")
+    assert response.headers["Location"].startswith("/")
+    assert "message=" in response.headers["Location"]
+
+
+def test_clearing_is_refused_over_get(client):
+    assert client.get("/queue/clear").status_code == 405
+
+
+def test_xhr_clearing_returns_the_new_status(client):
+    printing.FAKE_QUEUE.update(enabled=False, jobs=2, reason="Stopped")
+
+    response = client.post("/queue/clear", headers=JSON_HEADERS)
+    payload = response.get_json()
+
+    assert payload["ok"] is True
+    assert "2 job(s) cancelled" in payload["message"]
+    assert payload["queue"] == {
+        "enabled": True,
+        "jobs": 0,
+        "reason": "",
+        "known": True,
+    }
+
+
+def test_a_failure_to_clear_is_reported(client, monkeypatch):
+    def refuse():
+        raise printing.PrintError("cancel: Forbidden")
+
+    monkeypatch.setattr(printing, "clear_queue", refuse)
+
+    response = client.post("/queue/clear", headers=JSON_HEADERS)
+
+    assert response.status_code == 500
+    assert response.get_json()["ok"] is False
+    assert "Forbidden" in response.get_json()["message"]
+
+
+def test_printing_shows_up_in_the_queue_status(client, pdf_bytes):
+    post(client, {"mode": "pdf", "copies": "1", "pdf": upload("a.pdf", pdf_bytes)})
+
+    assert client.get("/queue").get_json()["jobs"] == 1

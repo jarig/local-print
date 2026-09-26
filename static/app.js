@@ -38,6 +38,11 @@
     var progress = document.getElementById("progress");
     var bar = document.getElementById("bar");
     var liveMessage = document.getElementById("live-message");
+    var queuePanel = document.getElementById("queue-panel");
+    var queueState = document.getElementById("queue-state");
+    var queueReason = document.getElementById("queue-reason");
+    var clearQueueBtn = document.getElementById("clear-queue");
+    var printerDot = document.getElementById("printer-dot");
     var pdfPreview = document.getElementById("pdf-preview");
     var previewSummary = document.getElementById("preview-summary");
     var pagesStrip = document.getElementById("pages-strip");
@@ -75,6 +80,115 @@
 
     function isPdfMode() {
         return modePdf.checked;
+    }
+
+    // --- Queue status -----------------------------------------------------
+
+    /** The same sentence the server renders, kept in step with it. */
+    function describeQueue(status) {
+        var jobs = status.jobs || 0;
+        var noun = jobs === 1 ? " job" : " jobs";
+
+        if (status.enabled === false) {
+            return jobs
+                ? "Printer stopped \u00b7 " + jobs + noun + " stuck"
+                : "Printer stopped";
+        }
+        return jobs + noun + " waiting";
+    }
+
+    function renderQueue(status) {
+        // An unreadable queue says nothing useful, so leave the panel on
+        // whatever the page last knew for certain.
+        if (!queuePanel || !status || status.known === false) {
+            return;
+        }
+
+        var stopped = status.enabled === false;
+
+        queueState.textContent = describeQueue(status);
+        queueReason.textContent = status.reason || "";
+        queueReason.hidden = !status.reason;
+        queuePanel.classList.toggle("queue-stopped", stopped);
+        queuePanel.hidden = !stopped && !(status.jobs || 0);
+
+        if (printerDot) {
+            printerDot.classList.toggle("dot-stopped", stopped);
+        }
+    }
+
+    function refreshQueue() {
+        var url = window.LOCALPRINT && window.LOCALPRINT.queueUrl;
+        if (!queuePanel || !url || typeof XMLHttpRequest === "undefined") {
+            return;
+        }
+
+        var request = new XMLHttpRequest();
+        request.open("GET", url);
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+        request.addEventListener("load", function () {
+            try {
+                renderQueue(JSON.parse(request.responseText));
+            } catch (err) {
+                /* Keep the last known state rather than inventing one. */
+            }
+        });
+        request.send();
+    }
+
+    if (queuePanel) {
+        queuePanel.addEventListener("submit", function (event) {
+            if (typeof XMLHttpRequest === "undefined") {
+                return; // Fall back to a normal form submission.
+            }
+
+            event.preventDefault();
+            if (!window.confirm(
+                "Cancel every waiting job and restart the printer?"
+            )) {
+                return;
+            }
+
+            clearQueueBtn.disabled = true;
+
+            var request = new XMLHttpRequest();
+            request.open("POST", queuePanel.action);
+            request.setRequestHeader("X-Requested-With", "LocalPrint");
+
+            request.addEventListener("load", function () {
+                clearQueueBtn.disabled = false;
+
+                var payload = null;
+                try {
+                    payload = JSON.parse(request.responseText);
+                } catch (err) {
+                    payload = null;
+                }
+
+                if (payload && payload.message) {
+                    showMessage(payload.message, payload.ok === true);
+                } else {
+                    showMessage(
+                        "Could not clear the queue (HTTP "
+                            + request.status + ").",
+                        false
+                    );
+                }
+
+                if (payload && payload.queue) {
+                    renderQueue(payload.queue);
+                } else {
+                    refreshQueue();
+                }
+            });
+
+            request.addEventListener("error", function () {
+                clearQueueBtn.disabled = false;
+                showMessage("Could not reach the print server.", false);
+            });
+
+            request.send();
+        });
     }
 
     // --- Page selection ---------------------------------------------------
@@ -755,6 +869,10 @@
             if (payload && payload.ok) {
                 clearFile();
             }
+
+            // A job that reaches a stopped queue reports success, so the
+            // queue has to be re-read before that success is believed.
+            refreshQueue();
         });
 
         request.addEventListener("error", function () {

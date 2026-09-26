@@ -592,3 +592,113 @@ def test_server_side_validation_still_applies_without_javascript(
         no_js_page.click("#submit")
 
     expect(no_js_page.locator(".message:not(#live-message)")).to_contain_text("Invalid page selection")
+
+# --------------------------------------------------------------------------
+# Queue status and clearing
+# --------------------------------------------------------------------------
+
+
+def reset_queue(page, live_server):
+    """Empty the shared server's queue so a count can be asserted."""
+    page.request.post(live_server + "/queue/clear")
+    page.reload()
+    page.wait_for_function(
+        "() => !document.documentElement.classList.contains('no-js')"
+    )
+
+
+def print_one_pdf(page, sample_files):
+    choose(page, "#pdf", sample_files["pdf1"])
+    page.click("#submit")
+    expect(page.locator("#live-message")).to_be_visible()
+
+
+def test_an_empty_queue_shows_no_panel(page, live_server):
+    reset_queue(page, live_server)
+    expect(page.locator("#queue-panel")).to_be_hidden()
+
+
+def test_a_healthy_queue_keeps_the_status_dot_green(page, live_server):
+    reset_queue(page, live_server)
+    expect(page.locator("#printer-dot")).not_to_have_class(re.compile("dot-stopped"))
+
+
+def test_printing_makes_the_waiting_job_visible(page, live_server, sample_files):
+    reset_queue(page, live_server)
+    print_one_pdf(page, sample_files)
+
+    # The panel exists so a job that never prints cannot pass unnoticed.
+    expect(page.locator("#queue-panel")).to_be_visible()
+    expect(page.locator("#queue-state")).to_have_text("1 job waiting")
+
+
+def test_a_second_job_is_counted(page, live_server, sample_files):
+    reset_queue(page, live_server)
+    print_one_pdf(page, sample_files)
+    print_one_pdf(page, sample_files)
+
+    expect(page.locator("#queue-state")).to_have_text("2 jobs waiting")
+
+
+def test_clearing_the_queue_from_the_browser_empties_it(
+    page, live_server, sample_files
+):
+    reset_queue(page, live_server)
+    print_one_pdf(page, sample_files)
+
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click("#clear-queue")
+
+    expect(page.locator("#queue-panel")).to_be_hidden()
+    expect(page.locator("#live-message")).to_contain_text("1 job(s) cancelled")
+
+
+def test_clearing_does_not_reload_the_page(page, live_server, sample_files):
+    reset_queue(page, live_server)
+    print_one_pdf(page, sample_files)
+    page.evaluate("() => { window.__stillHere = true; }")
+
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click("#clear-queue")
+    expect(page.locator("#queue-panel")).to_be_hidden()
+
+    assert page.evaluate("() => window.__stillHere === true")
+
+
+def test_dismissing_the_confirmation_keeps_the_jobs(
+    page, live_server, sample_files
+):
+    reset_queue(page, live_server)
+    print_one_pdf(page, sample_files)
+
+    page.on("dialog", lambda dialog: dialog.dismiss())
+    page.click("#clear-queue")
+
+    expect(page.locator("#queue-panel")).to_be_visible()
+    expect(page.locator("#queue-state")).to_have_text("1 job waiting")
+
+
+def test_clearing_works_without_javascript(no_js_page, live_server):
+    no_js_page.request.post(live_server + "/queue/clear")
+    no_js_page.request.post(
+        live_server + "/",
+        multipart={
+            "mode": "pdf",
+            "copies": "1",
+            "pdf": {
+                "name": "a.pdf",
+                "mimeType": "application/pdf",
+                "buffer": b"%PDF-1.4\n",
+            },
+        },
+    )
+    no_js_page.reload()
+
+    expect(no_js_page.locator("#queue-panel")).to_be_visible()
+    no_js_page.click("#clear-queue")
+
+    # A plain form POST, so the redirect brings the message back with it.
+    expect(no_js_page.locator(".message:not(#live-message)")).to_contain_text(
+        "cancelled"
+    )
+    expect(no_js_page.locator("#queue-panel")).to_be_hidden()

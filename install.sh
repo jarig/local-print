@@ -71,6 +71,24 @@ if ! command -v lp >/dev/null; then
     printf '\033[33m%s\033[0m\n' "Warning: the 'lp' command was not found. Install CUPS before printing."
 fi
 
+# ------------------------------------------------------- printer privileges
+
+# Clearing a stuck queue means cancelling other jobs and restarting a stopped
+# printer, and CUPS limits both to its SystemGroup. Membership of `lpadmin`
+# is enough for that over the local socket, with no password and no sudo --
+# which matters, because the unit below sets NoNewPrivileges.
+if getent group lpadmin >/dev/null; then
+    if id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx lpadmin; then
+        say "$RUN_USER can already manage the print queue."
+    else
+        say "Adding $RUN_USER to the lpadmin group so it can clear the queue..."
+        usermod -aG lpadmin "$RUN_USER"
+    fi
+else
+    printf '\033[33m%s\033[0m\n' \
+        "Warning: no 'lpadmin' group found, so clearing a stuck queue will not work."
+fi
+
 # ----------------------------------------------------------------- python
 
 if [ ! -x "$PYTHON" ]; then

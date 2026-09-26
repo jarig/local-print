@@ -110,6 +110,72 @@ h1 {
     color: var(--error-text);
 }
 
+/* Queue status */
+
+.queue {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    margin: 0 0 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--accent-soft);
+}
+
+.queue[hidden] {
+    display: none;
+}
+
+.queue-stopped {
+    border-color: transparent;
+    background: var(--error-bg);
+    color: var(--error-text);
+}
+
+.queue-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.queue-state {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.queue-reason {
+    margin: 2px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.queue-stopped .queue-reason {
+    color: inherit;
+    opacity: .8;
+}
+
+.queue-clear {
+    flex: none;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.queue-clear:disabled {
+    opacity: .5;
+    cursor: default;
+}
+
+.dot-stopped {
+    background: #ff3b30;
+}
+
 /* Mode switch */
 
 .mode {
