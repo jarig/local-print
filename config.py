@@ -96,10 +96,14 @@ def _require_int(key, minimum=None):
     return value
 
 
+def _optional(key):
+    """An optional setting. Absent means the feature it enables is off."""
+    return os.environ.get(key, _FILE.get(key, "")).strip()
+
+
 def _flag(key):
     """An optional switch. Absent means off."""
-    value = os.environ.get(key, _FILE.get(key, "")).strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return _optional(key).lower() in {"1", "true", "yes", "on"}
 
 
 PRINTER = _require("LOCALPRINT_PRINTER")
@@ -129,6 +133,11 @@ if MAX_COPIES < MIN_COPIES:
 # What the printing pipeline can handle, rather than a site preference.
 PDF_EXTENSIONS = {".pdf"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+
+# Optional: upscaling low-resolution images through OpenAI. Without a key the
+# Upscale button is simply not offered.
+OPENAI_API_KEY = _optional("LOCALPRINT_OPENAI_API_KEY")
+UPSCALE_MODEL = _optional("LOCALPRINT_UPSCALE_MODEL") or "gpt-image-2"
 
 # Development switches, normally left unset.
 FAKE_PRINTER = _flag("LOCALPRINT_FAKE_PRINTER")

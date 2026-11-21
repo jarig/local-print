@@ -36,6 +36,18 @@ LOCALPRINT_MIN_COPIES=1
 LOCALPRINT_MAX_COPIES=20
 
 
+# --- Upscaling (optional) ---------------------------------------------
+#
+# With an OpenAI API key, images too small to print sharply on A4 get an
+# "Upscale" button that redraws them at print resolution. Leave it unset to
+# turn the feature off. Keep the key out of version control.
+#
+# LOCALPRINT_OPENAI_API_KEY=sk-...
+#
+# The image model used, if not the default gpt-image-2.
+# LOCALPRINT_UPSCALE_MODEL=gpt-image-2
+
+
 # --- Deployment (used by deploy.ps1, ignored by the app) --------------
 
 # Where `deploy.ps1` uploads the application.

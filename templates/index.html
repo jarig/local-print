@@ -96,6 +96,13 @@
             </div>
         </div>
 
+        {% if upscale_enabled %}
+        <div class="upscale" id="upscale" hidden>
+            <p class="upscale-note" id="upscale-note"></p>
+            <button type="button" class="upscale-btn" id="upscale-btn">Upscale</button>
+        </div>
+        {% endif %}
+
         <div class="pdf-preview" id="pdf-preview" hidden>
             <div class="preview-head">
                 <p class="preview-summary" id="preview-summary">Reading PDF&hellip;</p>
@@ -185,6 +192,8 @@
         pdfLib: "{{ url_for('static', filename='vendor/pdf.min.js') }}",
         pdfWorker: "{{ url_for('static', filename='vendor/pdf.worker.min.js') }}",
         queueUrl: "{{ url_for('queue') }}",
+        upscaleUrl: "{{ url_for('upscale_image') }}",
+        upscalePlanUrl: "{{ url_for('upscale_plan') }}",
         maxUploadMb: {{ max_upload_mb }}
     };
 </script>

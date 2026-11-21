@@ -20,6 +20,11 @@ os.environ["LOCALPRINT_CONFIG"] = str(ROOT / "localprint.conf.example")
 # The app must never touch a real printer during tests.
 os.environ["LOCALPRINT_FAKE_PRINTER"] = "1"
 
+# Nor spend money on OpenAI. A real key is only used by the opt-in live test,
+# which reads its own variable.
+os.environ.pop("LOCALPRINT_OPENAI_API_KEY", None)
+FAKE_OPENAI_KEY = "sk-test-not-a-real-key"
+
 import app as app_module  # noqa: E402
 import printing  # noqa: E402
 
@@ -152,6 +157,8 @@ def sample_files(tmp_path_factory):
         # Deliberately capitalised, to guard the extension check.
         "pdfUpper": ("Contract.PDF", build_pdf(3)),
         "png": ("picture.png", build_png()),
+        # Fills A4 at about 300 dpi, so it needs no upscaling.
+        "pngSharp": ("sharp.png", build_png(2480, 3508)),
         "txt": ("notes.txt", b"not printable"),
     }
 
@@ -231,6 +238,9 @@ def live_server(tmp_path_factory):
     environment["LOCALPRINT_FAKE_PRINTER"] = "1"
     environment["LOCALPRINT_DEBUG"] = "0"
     environment["LOCALPRINT_PORT"] = str(port)
+    # Turns the Upscale button on. Browser tests intercept the upscale
+    # request itself, so this key never reaches OpenAI.
+    environment["LOCALPRINT_OPENAI_API_KEY"] = FAKE_OPENAI_KEY
 
     # The server logs every request, so its output goes to a file rather than
     # a pipe: an undrained pipe fills up and blocks the server mid-suite.
@@ -277,4 +287,9 @@ def live_server(tmp_path_factory):
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "e2e: browser test, requires Playwright"
+    )
+    config.addinivalue_line(
+        "markers",
+        "openai: calls the real OpenAI API; runs only when "
+        "LOCALPRINT_TEST_OPENAI_API_KEY is set",
     )

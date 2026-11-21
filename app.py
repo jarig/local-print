@@ -7,6 +7,7 @@ import tempfile
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     render_template,
@@ -16,6 +17,7 @@ from flask import (
 
 import config
 import printing
+import upscale
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_SIZE
@@ -106,6 +108,7 @@ def respond(message, status=200, ok=False):
         max_copies=config.MAX_COPIES,
         printer_options=printing.discover_options(),
         queue=printing.queue_status(),
+        upscale_enabled=upscale.enabled(),
     ), status
 
 
@@ -239,6 +242,90 @@ def clear_queue():
         )
 
     return redirect(url_for("index", message=message))
+
+
+# Generous, but stops an absurd size from reaching the arithmetic.
+MAX_IMAGE_EDGE = 100_000
+
+
+def parse_dimension(name, required=True):
+    raw = request.values.get(name, "")
+    if not raw and not required:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a whole number of pixels.")
+    if not 1 <= value <= MAX_IMAGE_EDGE:
+        raise ValueError(f"{name} must be between 1 and {MAX_IMAGE_EDGE}.")
+    return value
+
+
+@app.route("/upscale/plan")
+def upscale_plan():
+    """Whether an image of this size is too small for A4, and the fix."""
+    if not upscale.enabled():
+        return jsonify(ok=False, message="Upscaling is not configured."), 404
+    try:
+        width = parse_dimension("width")
+        height = parse_dimension("height")
+    except ValueError as error:
+        return jsonify(ok=False, message=str(error)), 400
+    return jsonify(ok=True, **upscale.plan(width, height))
+
+
+@app.route("/upscale", methods=["POST"])
+def upscale_image():
+    """Upscale an image and send it back for the browser to print."""
+    if not upscale.enabled():
+        return jsonify(ok=False, message="Upscaling is not configured."), 404
+
+    image = request.files.get("image")
+    if not image or not image.filename:
+        return jsonify(ok=False, message="Please select an image."), 400
+
+    _, suffix = os.path.splitext(image.filename.lower())
+    if suffix not in config.IMAGE_EXTENSIONS:
+        return jsonify(ok=False, message="Image must be a JPEG or PNG."), 400
+
+    data = image.read()
+    try:
+        width, height = upscale.image_size(data)
+
+        # The browser reports the size as displayed. A photo with an EXIF
+        # rotation stores its edges the other way round, and only the
+        # displayed orientation tells the model which way up to draw it.
+        shown = (
+            parse_dimension("width", required=False),
+            parse_dimension("height", required=False),
+        )
+        if all(shown) and sorted(shown) == sorted((width, height)):
+            width, height = shown
+    except ValueError as error:
+        return jsonify(ok=False, message=str(error)), 400
+
+    target = upscale.plan(width, height)["target"]
+    if not target:
+        return jsonify(
+            ok=False,
+            message="This image is already sharp enough for A4.",
+        ), 400
+
+    size = (target["width"], target["height"])
+    try:
+        result = upscale.upscale(data, suffix, size)
+    except upscale.UpscaleError as error:
+        return jsonify(ok=False, message=str(error)), 502
+
+    return Response(
+        result,
+        mimetype="image/jpeg",
+        headers={
+            "X-Upscaled-Width": str(size[0]),
+            "X-Upscaled-Height": str(size[1]),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.errorhandler(413)

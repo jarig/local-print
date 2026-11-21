@@ -47,12 +47,20 @@
     var previewSummary = document.getElementById("preview-summary");
     var pagesStrip = document.getElementById("pages-strip");
     var toggleAllBtn = document.getElementById("toggle-all");
+    var upscaleBox = document.getElementById("upscale");
+    var upscaleNote = document.getElementById("upscale-note");
+    var upscaleBtn = document.getElementById("upscale-btn");
     var objectUrl = null;
 
     var pageCount = 0;
     var selectedPages = null;   // Set of 1-based page numbers, or null.
     var pdfLibPromise = null;
     var renderToken = 0;        // Invalidates renders for superseded files.
+
+    var upscaleToken = 0;       // Invalidates upscale work for old files.
+    var upscaleRequest = null;
+    var upscaling = false;
+    var shownSize = null;       // Displayed size of the current image.
 
     function extensionOf(name) {
         var dot = name.lastIndexOf(".");
@@ -507,6 +515,7 @@
 
     function clearFile() {
         releaseThumb();
+        resetUpscale();
         pdfInput.value = "";
         imageInput.value = "";
         thumb.innerHTML = "";
@@ -518,12 +527,21 @@
 
     function renderPreview(file) {
         releaseThumb();
+        resetUpscale();
         filenameEl.textContent = file.name;
         filesizeEl.textContent = formatSize(file.size);
 
         if (file.type.indexOf("image/") === 0) {
             objectUrl = URL.createObjectURL(file);
             var img = new Image();
+            var token = upscaleToken;
+            img.onload = function () {
+                // naturalWidth honours EXIF rotation, so this is the size
+                // as it will be printed.
+                if (token === upscaleToken) {
+                    checkUpscale(img.naturalWidth, img.naturalHeight);
+                }
+            };
             img.src = objectUrl;
             img.alt = "";
             thumb.innerHTML = "";
@@ -552,7 +570,7 @@
     /** Assign a dropped/selected file to the input matching its type. */
     function acceptFile(file) {
         if (!file) {
-            return;
+            return false;
         }
 
         var ext = extensionOf(file.name);
@@ -569,7 +587,7 @@
                 "Unsupported file type \u201c." + ext + "\u201d. Choose a PDF, JPEG or PNG.",
                 false
             );
-            return;
+            return false;
         }
 
         if (MAX_BYTES && file.size > MAX_BYTES) {
@@ -578,7 +596,7 @@
                     ". The limit is " + MAX_UPLOAD_MB + " MB.",
                 false
             );
-            return;
+            return false;
         }
 
         syncMode();
@@ -591,11 +609,192 @@
             target.files = transfer.files;
         } catch (err) {
             showMessage("This browser cannot accept dropped files.", false);
-            return;
+            return false;
         }
 
         showMessage("", true);
         renderPreview(file);
+        return true;
+    }
+
+    // --- Upscaling --------------------------------------------------------
+
+    function formatPixels(width, height) {
+        return width + "\u00d7" + height;
+    }
+
+    function setUpscaling(busy) {
+        upscaling = busy;
+        upscaleBtn.disabled = busy;
+        // Printing the original while its replacement is on the way would
+        // waste paper on exactly the print this is meant to avoid.
+        submitBtn.disabled = busy;
+    }
+
+    /** Forget any upscale offer or request for the previous file. */
+    function resetUpscale() {
+        if (!upscaleBox) {
+            return;
+        }
+
+        upscaleToken += 1;
+        shownSize = null;
+        if (upscaleRequest) {
+            upscaleRequest.abort();
+            upscaleRequest = null;
+        }
+        if (upscaling) {
+            setUpscaling(false);
+        }
+        upscaleBox.hidden = true;
+    }
+
+    /** Ask the server whether this image is too small for A4. */
+    function checkUpscale(width, height) {
+        var url = window.LOCALPRINT && window.LOCALPRINT.upscalePlanUrl;
+        if (!upscaleBox || !url || !width || !height) {
+            return;
+        }
+
+        var token = upscaleToken;
+        var request = new XMLHttpRequest();
+        request.open(
+            "GET",
+            url + "?width=" + width + "&height=" + height
+        );
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+        request.addEventListener("load", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+
+            var plan = null;
+            try {
+                plan = JSON.parse(request.responseText);
+            } catch (err) {
+                plan = null;
+            }
+            if (!plan || !plan.ok || !plan.low_res) {
+                return;
+            }
+
+            shownSize = { width: width, height: height };
+            upscaleNote.textContent =
+                "Low resolution for A4: " + plan.dpi + " dpi. " +
+                "It may print blurry.";
+
+            var target = plan.target;
+            upscaleBtn.hidden = !target;
+            if (target) {
+                upscaleBtn.textContent =
+                    "Upscale " + formatPixels(width, height) +
+                    " \u2192 " + formatPixels(target.width, target.height);
+                upscaleBtn.title =
+                    "About " + target.dpi + " dpi on A4";
+            }
+            upscaleBox.hidden = false;
+        });
+        request.send();
+    }
+
+    function readUpscaleError(request) {
+        return new Promise(function (resolve) {
+            var fallback = "Upscaling failed (HTTP " + request.status + ").";
+            var blob = request.response;
+            if (!blob || typeof blob.text !== "function") {
+                resolve(fallback);
+                return;
+            }
+            blob.text().then(function (text) {
+                try {
+                    resolve(JSON.parse(text).message || fallback);
+                } catch (err) {
+                    resolve(fallback);
+                }
+            }, function () {
+                resolve(fallback);
+            });
+        });
+    }
+
+    function startUpscale() {
+        var url = window.LOCALPRINT && window.LOCALPRINT.upscaleUrl;
+        var file = imageInput.files && imageInput.files[0];
+        if (!url || !file || !shownSize || upscaling) {
+            return;
+        }
+
+        var token = upscaleToken;
+        var original = shownSize;
+        var label = upscaleBtn.textContent;
+
+        setUpscaling(true);
+        upscaleBtn.textContent = "Upscaling\u2026 this can take a minute";
+        showMessage("", true);
+
+        var data = new FormData();
+        data.append("image", file);
+        data.append("width", String(original.width));
+        data.append("height", String(original.height));
+
+        var request = new XMLHttpRequest();
+        upscaleRequest = request;
+        request.open("POST", url);
+        request.responseType = "blob";
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+
+        request.addEventListener("load", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+            upscaleRequest = null;
+            setUpscaling(false);
+
+            if (request.status !== 200) {
+                upscaleBtn.textContent = label;
+                readUpscaleError(request).then(function (message) {
+                    if (token === upscaleToken) {
+                        showMessage(message, false);
+                    }
+                });
+                return;
+            }
+
+            var base = file.name.replace(/\.[^.]*$/, "") || "image";
+            var upscaled = new File(
+                [request.response],
+                base + "-upscaled.jpg",
+                { type: "image/jpeg" }
+            );
+
+            if (acceptFile(upscaled)) {
+                showMessage(
+                    "Upscaled from " +
+                        formatPixels(original.width, original.height) +
+                        " to " +
+                        formatPixels(
+                            request.getResponseHeader("X-Upscaled-Width"),
+                            request.getResponseHeader("X-Upscaled-Height")
+                        ) +
+                        ". Ready to print.",
+                    true
+                );
+            } else {
+                upscaleBtn.textContent = label;
+            }
+        });
+
+        request.addEventListener("error", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+            upscaleRequest = null;
+            setUpscaling(false);
+            upscaleBtn.textContent = label;
+            showMessage("Could not reach the print server.", false);
+        });
+
+        request.send(data);
     }
 
     function validatePages() {
@@ -692,6 +891,10 @@
         clearFile();
         showMessage("", true);
     });
+
+    if (upscaleBtn) {
+        upscaleBtn.addEventListener("click", startUpscale);
+    }
 
     ["dragenter", "dragover"].forEach(function (name) {
         dropZone.addEventListener(name, function (event) {

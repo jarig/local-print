@@ -43,8 +43,11 @@ account.
 - **Mobile-first** — designed for a phone, works on a desktop. Follows the
   system light/dark theme.
 - **Drag and drop** with upload progress.
+- **Upscaling for low-resolution images** (optional) — an image too small
+  to print sharply on A4 gets an *Upscale 480×640 → 2480×3312* button that
+  redraws it through OpenAI. See [Upscaling](#upscaling).
 - **Works offline** — no CDNs. `pdf.js` is vendored, so the LAN needs no
-  internet access.
+  internet access. (Only the optional upscaling reaches out, to OpenAI.)
 - **Works without JavaScript** — the form degrades to a plain POST.
 
 ## Requirements
@@ -196,6 +199,13 @@ Deployment settings, read by `deploy.ps1` only:
 | `LOCALPRINT_USER` | `me` | SSH user |
 | `LOCALPRINT_REMOTE_PATH` | `local-print` | Folder under the user's home |
 
+Optional settings, which turn a feature on when present:
+
+| Setting | Purpose |
+| --- | --- |
+| `LOCALPRINT_OPENAI_API_KEY` | OpenAI API key; enables [Upscaling](#upscaling) |
+| `LOCALPRINT_UPSCALE_MODEL` | Image model for upscaling (default `gpt-image-2`) |
+
 Optional development switches, normally left unset:
 
 | Setting | Purpose |
@@ -256,6 +266,37 @@ Two things follow from reading the printer directly:
   becomes *Black & white* — and prettifies the rest.
 - After swapping the printer or its driver, restart the service (or wait
   five minutes) for the new options to appear.
+
+## Upscaling
+
+A picture that looks fine on a phone can be far too small for paper. When
+an image is chosen, LocalPrint works out its resolution once it is scaled to
+fill an A4 page (turned to match the picture). Below **150 dpi** it shows a
+note and a button saying exactly what would happen:
+
+> Low resolution for A4: 55 dpi. It may print blurry.
+> **Upscale 480×640 → 2480×3312**
+
+The target aims for 300 dpi on A4, keeps the picture's shape, and stays
+within what the image model can produce (edges in multiples of 16 px, at
+most 3840 px and about 8.3 megapixels). Pictures more than 3:1 wide or tall
+get the note but no button, since the model cannot draw them.
+
+Pressing the button sends the image to OpenAI's image edit endpoint
+(`gpt-image-2` by default), asking for a faithful redraw at that size. It
+usually takes about a minute; Print is disabled meanwhile. The result
+replaces the chosen file as `<name>-upscaled.jpg`, so you can check the
+preview before printing it — upscaling never prints anything on its own.
+
+To enable it, add your key to `localprint.conf`:
+
+```
+LOCALPRINT_OPENAI_API_KEY=sk-...
+```
+
+Without a key the button never appears. The server needs internet access to
+`api.openai.com` for this feature only, and each upscale is billed to the
+key's OpenAI account.
 
 ## When nothing prints
 
@@ -324,11 +365,17 @@ python -m pytest -m "not e2e"     # backend only, no browser needed (<1s)
   printing.
 - `tests/test_config.py` — the config loader, including its refusal to
   invent defaults.
+- `tests/test_upscale.py` — when an upscale is offered and to what size,
+  reading image sizes, and the OpenAI request, with the API stubbed out.
 - `tests/test_ui.py` — Playwright browser tests for the parts that only
-  exist in JavaScript: the page picker, drag and drop, mobile layout, dark
-  mode and the no-JavaScript fallback.
+  exist in JavaScript: the page picker, drag and drop, upscaling, mobile
+  layout, dark mode and the no-JavaScript fallback.
 
-No test ever contacts a real printer.
+No test ever contacts a real printer, nor OpenAI unless you opt in:
+
+```bash
+LOCALPRINT_TEST_OPENAI_API_KEY=sk-... python -m pytest -m openai
+```
 
 ## How it works
 
@@ -341,6 +388,7 @@ touches the filesystem.
 local-print/
 ├── app.py                 # Flask app: routes and request validation
 ├── printing.py            # Builds and runs the lp command
+├── upscale.py             # Low-resolution check and OpenAI upscaling
 ├── config.py              # Strict loader for localprint.conf
 ├── localprint.conf.example# Configuration template
 ├── templates/index.html
@@ -363,6 +411,10 @@ anything outside the configured private range.
 
 Do not expose it to the internet. If you need remote access, put it behind
 a VPN.
+
+With upscaling enabled, anyone on the LAN can spend the configured OpenAI
+key's credit, and an image is sent to OpenAI only when someone presses
+**Upscale**.
 
 ## Third-party
 
