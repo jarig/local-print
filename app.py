@@ -16,6 +16,7 @@ from flask import (
 )
 
 import config
+import openai_images
 import printing
 import upscale
 
@@ -108,7 +109,8 @@ def respond(message, status=200, ok=False):
         max_copies=config.MAX_COPIES,
         printer_options=printing.discover_options(),
         queue=printing.queue_status(),
-        upscale_enabled=upscale.enabled(),
+        ai_enabled=openai_images.enabled(),
+        max_prompt_length=MAX_PROMPT_LENGTH,
     ), status
 
 
@@ -264,7 +266,7 @@ def parse_dimension(name, required=True):
 @app.route("/upscale/plan")
 def upscale_plan():
     """Whether an image of this size is too small for A4, and the fix."""
-    if not upscale.enabled():
+    if not openai_images.enabled():
         return jsonify(ok=False, message="Upscaling is not configured."), 404
     try:
         width = parse_dimension("width")
@@ -277,7 +279,7 @@ def upscale_plan():
 @app.route("/upscale", methods=["POST"])
 def upscale_image():
     """Upscale an image and send it back for the browser to print."""
-    if not upscale.enabled():
+    if not openai_images.enabled():
         return jsonify(ok=False, message="Upscaling is not configured."), 404
 
     image = request.files.get("image")
@@ -314,7 +316,7 @@ def upscale_image():
     size = (target["width"], target["height"])
     try:
         result = upscale.upscale(data, suffix, size)
-    except upscale.UpscaleError as error:
+    except openai_images.OpenAIError as error:
         return jsonify(ok=False, message=str(error)), 502
 
     return Response(
@@ -323,6 +325,60 @@ def upscale_image():
         headers={
             "X-Upscaled-Width": str(size[0]),
             "X-Upscaled-Height": str(size[1]),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+# A4's proportions (1:√2) at the smallest size that still previews well,
+# about 123 dpi on paper. Output tokens, and so cost, grow with the pixel
+# count; a picture worth printing sharply can be upscaled afterwards.
+GENERATE_SIZES = {
+    "portrait": (1024, 1440),
+    "landscape": (1440, 1024),
+}
+
+# Low quality costs about a tenth of medium (153 against 1,418 output tokens
+# at 1024x1440) and is barely distinguishable on paper.
+GENERATE_QUALITY = "low"
+
+# The model accepts far more, but a description longer than this is almost
+# certainly a paste gone wrong.
+MAX_PROMPT_LENGTH = 4000
+
+
+@app.route("/generate", methods=["POST"])
+def generate_image():
+    """Draw an image from a description, for the browser to preview."""
+    if not openai_images.enabled():
+        return jsonify(ok=False, message="Image generation is not configured."), 404
+
+    prompt = (request.form.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify(ok=False, message="Describe the image to generate."), 400
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        return jsonify(
+            ok=False,
+            message=f"The description is too long. Keep it under "
+            f"{MAX_PROMPT_LENGTH} characters.",
+        ), 400
+
+    orientation = request.form.get("orientation") or "portrait"
+    size = GENERATE_SIZES.get(orientation)
+    if not size:
+        return jsonify(ok=False, message="Invalid orientation."), 400
+
+    try:
+        result = openai_images.generate(prompt, size, quality=GENERATE_QUALITY)
+    except openai_images.OpenAIError as error:
+        return jsonify(ok=False, message=str(error)), 502
+
+    return Response(
+        result,
+        mimetype="image/jpeg",
+        headers={
+            "X-Generated-Width": str(size[0]),
+            "X-Generated-Height": str(size[1]),
             "Cache-Control": "no-store",
         },
     )

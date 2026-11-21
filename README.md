@@ -46,8 +46,12 @@ account.
 - **Upscaling for low-resolution images** (optional) — an image too small
   to print sharply on A4 gets an *Upscale 480×640 → 2480×3312* button that
   redraws it through OpenAI. See [Upscaling](#upscaling).
+- **Generate from text** (optional) — describe a picture, preview what
+  OpenAI draws, then print it. See [Generating images](#generating-images).
+- **Large image preview** — the chosen image is shown full width before
+  printing.
 - **Works offline** — no CDNs. `pdf.js` is vendored, so the LAN needs no
-  internet access. (Only the optional upscaling reaches out, to OpenAI.)
+  internet access. (Only the optional OpenAI features reach out.)
 - **Works without JavaScript** — the form degrades to a plain POST.
 
 ## Requirements
@@ -203,8 +207,8 @@ Optional settings, which turn a feature on when present:
 
 | Setting | Purpose |
 | --- | --- |
-| `LOCALPRINT_OPENAI_API_KEY` | OpenAI API key; enables [Upscaling](#upscaling) |
-| `LOCALPRINT_UPSCALE_MODEL` | Image model for upscaling (default `gpt-image-2`) |
+| `LOCALPRINT_OPENAI_API_KEY` | OpenAI API key; enables [Upscaling](#upscaling) and [Generating images](#generating-images) |
+| `LOCALPRINT_OPENAI_IMAGE_MODEL` | Image model for both (default `gpt-image-2`) |
 
 Optional development switches, normally left unset:
 
@@ -298,6 +302,28 @@ Without a key the button never appears. The server needs internet access to
 `api.openai.com` for this feature only, and each upscale is billed to the
 key's OpenAI account.
 
+## Generating images
+
+With the same key, Image mode offers **Generate from text**. Tapping it
+opens a box to describe the picture and a choice of portrait or landscape;
+**Generate** asks OpenAI's image model to draw it.
+
+The image is drawn in A4's proportions at 1024×1440 with OpenAI's `low`
+quality, which keeps each image to roughly 150 output tokens — about half a
+cent — and takes 10–20 seconds. Print is disabled meanwhile. That is about
+120 dpi on A4: fine for most pictures, and the [Upscale](#upscaling) button
+appears so a keeper can be redrawn sharper (upscaling runs at high quality
+and costs considerably more).
+
+The result becomes the chosen image, `generated-<description>.jpg`, and is
+shown full width so you can check it first. Nothing prints until you press
+**Print**; if it is not right, edit the description and press **Generate
+again**. Choosing a file of your own, or switching to PDF, abandons a
+generation still in progress.
+
+OpenAI may refuse a description that breaks its usage policies; the reason
+it gives is shown as the error.
+
 ## When nothing prints
 
 CUPS stops a queue when the printer fails mid-job — a dropped Wi-Fi
@@ -367,9 +393,12 @@ python -m pytest -m "not e2e"     # backend only, no browser needed (<1s)
   invent defaults.
 - `tests/test_upscale.py` — when an upscale is offered and to what size,
   reading image sizes, and the OpenAI request, with the API stubbed out.
+- `tests/test_generate.py` — generating from a description: the request,
+  sizes and validation, with the API stubbed out.
 - `tests/test_ui.py` — Playwright browser tests for the parts that only
-  exist in JavaScript: the page picker, drag and drop, upscaling, mobile
-  layout, dark mode and the no-JavaScript fallback.
+  exist in JavaScript: the page picker, drag and drop, upscaling, generating
+  from text, the large preview, mobile layout, dark mode and the
+  no-JavaScript fallback.
 
 No test ever contacts a real printer, nor OpenAI unless you opt in:
 
@@ -388,7 +417,8 @@ touches the filesystem.
 local-print/
 ├── app.py                 # Flask app: routes and request validation
 ├── printing.py            # Builds and runs the lp command
-├── upscale.py             # Low-resolution check and OpenAI upscaling
+├── upscale.py             # Low-resolution check and upscaling
+├── openai_images.py       # OpenAI image API: edit and generate
 ├── config.py              # Strict loader for localprint.conf
 ├── localprint.conf.example# Configuration template
 ├── templates/index.html
@@ -412,9 +442,9 @@ anything outside the configured private range.
 Do not expose it to the internet. If you need remote access, put it behind
 a VPN.
 
-With upscaling enabled, anyone on the LAN can spend the configured OpenAI
-key's credit, and an image is sent to OpenAI only when someone presses
-**Upscale**.
+With the OpenAI features enabled, anyone on the LAN can spend the configured
+key's credit. Images and descriptions are sent to OpenAI only when someone
+presses **Upscale** or **Generate**.
 
 ## Third-party
 

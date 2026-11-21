@@ -1,7 +1,5 @@
 """Upscaling low-resolution images: when it is offered, and the API call."""
-import base64
 import io
-import json
 import os
 import struct
 import urllib.error
@@ -9,8 +7,9 @@ import urllib.error
 import pytest
 
 import config
+import openai_images
 import upscale
-from conftest import build_png
+from conftest import build_png, http_error
 
 JSON_HEADERS = {"X-Requested-With": "LocalPrint"}
 
@@ -24,44 +23,6 @@ def build_jpeg_header(width, height):
         + b"\xff\xe0" + struct.pack(">H", len(app0) + 2) + app0
         + b"\xff\xc0" + struct.pack(">H", len(sof0) + 2) + sof0
         + b"\xff\xd9"
-    )
-
-
-@pytest.fixture
-def api_key(monkeypatch):
-    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test-key")
-    return "sk-test-key"
-
-
-class FakeReply(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-@pytest.fixture
-def openai(monkeypatch):
-    """Stand in for the OpenAI endpoint, recording what was sent."""
-    calls = []
-    state = {"result": b"upscaled-jpeg", "error": None}
-
-    def fake_urlopen(request, timeout):
-        calls.append({"request": request, "timeout": timeout})
-        if state["error"]:
-            raise state["error"]
-        payload = {"data": [{"b64_json": base64.b64encode(state["result"]).decode()}]}
-        return FakeReply(json.dumps(payload).encode())
-
-    monkeypatch.setattr(upscale.urllib.request, "urlopen", fake_urlopen)
-    state["calls"] = calls
-    return state
-
-
-def http_error(status, body):
-    return urllib.error.HTTPError(
-        upscale.EDITS_URL, status, "error", {}, io.BytesIO(body)
     )
 
 
@@ -147,9 +108,9 @@ def test_upscale_sends_the_image_and_size(api_key, openai):
     png = build_png(10, 12)
     result = upscale.upscale(png, ".png", (2480, 3312))
 
-    assert result == b"upscaled-jpeg"
+    assert result == b"fake-jpeg"
     request = openai["calls"][0]["request"]
-    assert request.full_url == upscale.EDITS_URL
+    assert request.full_url == openai_images.EDITS_URL
     assert request.get_header("Authorization") == f"Bearer {api_key}"
 
     body = request.data
@@ -163,25 +124,25 @@ def test_upscale_reports_the_apis_own_error(api_key, openai):
     openai["error"] = http_error(
         400, b'{"error": {"message": "Your request was rejected."}}'
     )
-    with pytest.raises(upscale.UpscaleError, match="Your request was rejected"):
+    with pytest.raises(openai_images.OpenAIError, match="Your request was rejected"):
         upscale.upscale(build_png(), ".png", (1024, 1024))
 
 
 def test_upscale_survives_an_error_without_a_body(api_key, openai):
     openai["error"] = http_error(503, b"")
-    with pytest.raises(upscale.UpscaleError, match="HTTP 503"):
+    with pytest.raises(openai_images.OpenAIError, match="HTTP 503"):
         upscale.upscale(build_png(), ".png", (1024, 1024))
 
 
 def test_upscale_reports_an_unreachable_api(api_key, openai):
     openai["error"] = urllib.error.URLError("no route to host")
-    with pytest.raises(upscale.UpscaleError, match="Could not reach OpenAI"):
+    with pytest.raises(openai_images.OpenAIError, match="Could not reach OpenAI"):
         upscale.upscale(build_png(), ".png", (1024, 1024))
 
 
 def test_upscale_needs_a_key(monkeypatch, openai):
     monkeypatch.setattr(config, "OPENAI_API_KEY", "")
-    with pytest.raises(upscale.UpscaleError, match="not configured"):
+    with pytest.raises(openai_images.OpenAIError, match="not configured"):
         upscale.upscale(build_png(), ".png", (1024, 1024))
     assert openai["calls"] == []
 
@@ -235,7 +196,7 @@ def test_upscale_route_returns_the_upscaled_image(client, api_key, openai):
 
     assert reply.status_code == 200
     assert reply.mimetype == "image/jpeg"
-    assert reply.data == b"upscaled-jpeg"
+    assert reply.data == b"fake-jpeg"
     assert reply.headers["X-Upscaled-Width"] == "2480"
     assert reply.headers["X-Upscaled-Height"] == "3312"
 

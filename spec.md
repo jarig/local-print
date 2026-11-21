@@ -301,7 +301,8 @@ local-print/
 ├── app.py                 # Flask app: routes, validation, CUPS invocation
 ├── printing.py            # Printer abstraction: discovers options, runs lp,
 │                          # reads and clears the queue
-├── upscale.py             # Low-resolution check and OpenAI upscaling
+├── upscale.py             # Low-resolution check and upscaling
+├── openai_images.py       # OpenAI image API: edit and generate
 ├── config.py              # Strict loader for localprint.conf; no defaults
 ├── localprint.conf        # Site settings (git-ignored)
 ├── localprint.conf.example# Committed template for the above
@@ -332,6 +333,7 @@ Development-only files that are **not** deployed:
     ├── test_queue.py      # Queue status parsing and clearing a stuck queue
     ├── test_routes.py     # HTTP behaviour of the upload endpoint
     ├── test_upscale.py    # Upscale planning, image sizes, the OpenAI call
+    ├── test_generate.py   # Generating an image from a description
     └── test_ui.py         # Browser tests driven through Playwright
 ```
 
@@ -402,7 +404,8 @@ them a "select none" regression would silently print the whole document.
 1. Reads the target host, user and remote path from `localprint.conf`, then
    verifies the SSH connection.
 2. Creates `templates/` and `static/` under the deploy path if missing.
-3. Copies `app.py`, `printing.py`, `upscale.py`, `config.py`,
+3. Copies `app.py`, `printing.py`, `upscale.py`, `openai_images.py`,
+   `config.py`,
    `localprint.conf`,
    `localprint.conf.example`, `requirements.txt`, `start.sh`, `install.sh`,
    `templates/*`, `static/*` via `scp`. Vendored third-party bundles under

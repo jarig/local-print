@@ -96,10 +96,41 @@
             </div>
         </div>
 
-        {% if upscale_enabled %}
+        {% if ai_enabled %}
         <div class="upscale" id="upscale" hidden>
             <p class="upscale-note" id="upscale-note"></p>
-            <button type="button" class="upscale-btn" id="upscale-btn">Upscale</button>
+            <button type="button" class="ai-btn" id="upscale-btn">Upscale</button>
+        </div>
+        {% endif %}
+
+        <figure class="image-view" id="image-view" hidden>
+            <img id="image-view-img" alt="Preview of the image to print">
+            <figcaption class="hint" id="image-view-caption"></figcaption>
+        </figure>
+
+        {% if ai_enabled %}
+        <div class="generate" id="generate" hidden>
+            <button type="button" class="generate-toggle" id="generate-toggle"
+                    aria-expanded="false" aria-controls="generate-panel">
+                Generate from text
+            </button>
+            <div class="generate-panel" id="generate-panel" hidden>
+                <label for="prompt">Describe the image</label>
+                <textarea id="prompt" rows="4" maxlength="{{ max_prompt_length }}"
+                          placeholder="e.g. A watercolour fox in a snowy forest, soft morning light"></textarea>
+                <div class="chips" role="radiogroup" aria-label="Orientation">
+                    <label class="chip">
+                        <input type="radio" name="generate_orientation" value="portrait" checked>
+                        <span>Portrait</span>
+                    </label>
+                    <label class="chip">
+                        <input type="radio" name="generate_orientation" value="landscape">
+                        <span>Landscape</span>
+                    </label>
+                </div>
+                <p class="inline-error" id="prompt-error" hidden></p>
+                <button type="button" class="ai-btn" id="generate-btn">Generate</button>
+            </div>
         </div>
         {% endif %}
 
@@ -194,6 +225,7 @@
         queueUrl: "{{ url_for('queue') }}",
         upscaleUrl: "{{ url_for('upscale_image') }}",
         upscalePlanUrl: "{{ url_for('upscale_plan') }}",
+        generateUrl: "{{ url_for('generate_image') }}",
         maxUploadMb: {{ max_upload_mb }}
     };
 </script>

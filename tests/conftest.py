@@ -1,10 +1,14 @@
 """Shared fixtures for the LocalPrint test suite."""
+import base64
+import io
+import json
 import os
 import socket
 import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import zlib
 from pathlib import Path
 
@@ -26,6 +30,8 @@ os.environ.pop("LOCALPRINT_OPENAI_API_KEY", None)
 FAKE_OPENAI_KEY = "sk-test-not-a-real-key"
 
 import app as app_module  # noqa: E402
+import config  # noqa: E402
+import openai_images  # noqa: E402
 import printing  # noqa: E402
 
 
@@ -192,6 +198,49 @@ def flask_app():
 @pytest.fixture
 def client(flask_app):
     return flask_app.test_client()
+
+
+# --------------------------------------------------------------------------
+# OpenAI, stubbed
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_key(monkeypatch):
+    """Turn the AI features on, with a key that is never sent anywhere."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", FAKE_OPENAI_KEY)
+    return FAKE_OPENAI_KEY
+
+
+class _FakeReply(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def openai(monkeypatch):
+    """Stand in for the OpenAI image API, recording every request."""
+    state = {"result": b"fake-jpeg", "error": None, "calls": []}
+
+    def fake_urlopen(request, timeout):
+        state["calls"].append({"request": request, "timeout": timeout})
+        if state["error"]:
+            raise state["error"]
+        image = base64.b64encode(state["result"]).decode()
+        return _FakeReply(json.dumps({"data": [{"b64_json": image}]}).encode())
+
+    monkeypatch.setattr(openai_images.urllib.request, "urlopen", fake_urlopen)
+    return state
+
+
+def http_error(status, body):
+    """An error response from the API, as urllib raises it."""
+    return urllib.error.HTTPError(
+        openai_images.EDITS_URL, status, "error", {}, io.BytesIO(body)
+    )
 
 
 @pytest.fixture

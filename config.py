@@ -134,10 +134,10 @@ if MAX_COPIES < MIN_COPIES:
 PDF_EXTENSIONS = {".pdf"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
-# Optional: upscaling low-resolution images through OpenAI. Without a key the
-# Upscale button is simply not offered.
+# Optional: OpenAI image features -- upscaling low-resolution images and
+# generating images from text. Without a key neither is offered.
 OPENAI_API_KEY = _optional("LOCALPRINT_OPENAI_API_KEY")
-UPSCALE_MODEL = _optional("LOCALPRINT_UPSCALE_MODEL") or "gpt-image-2"
+IMAGE_MODEL = _optional("LOCALPRINT_OPENAI_IMAGE_MODEL") or "gpt-image-2"
 
 # Development switches, normally left unset.
 FAKE_PRINTER = _flag("LOCALPRINT_FAKE_PRINTER")

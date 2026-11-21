@@ -4,20 +4,12 @@ A photo that looks fine on a phone can be far too small for a sheet of
 paper: stretched across A4 its pixels become visible. This module decides
 when that is the case and, if an OpenAI API key is configured, asks an image
 model to redraw the picture at a printable resolution.
-
-Everything here uses the standard library, so the feature adds no
-dependencies to the server.
 """
-import base64
-import json
 import math
-import socket
 import struct
-import urllib.error
-import urllib.request
-import uuid
 
-import config
+import openai_images
+from openai_images import MAX_ASPECT, MAX_EDGE, MAX_PIXELS, MIN_PIXELS, SIZE_STEP
 
 # A4 in inches, portrait.
 A4_INCHES = (210 / 25.4, 297 / 25.4)
@@ -29,18 +21,6 @@ LOW_RES_DPI = 150
 # What an upscale aims for: photo-quality print resolution.
 TARGET_DPI = 300
 
-# Output limits of the image model's custom sizes.
-MAX_EDGE = 3840
-MAX_PIXELS = 8_294_400
-MIN_PIXELS = 655_360
-SIZE_STEP = 16
-MAX_ASPECT = 3
-
-EDITS_URL = "https://api.openai.com/v1/images/edits"
-
-# Large edits routinely take a minute or more.
-TIMEOUT_SECONDS = 300
-
 PROMPT = (
     "Upscale this image to a higher resolution for printing. Reproduce it "
     "faithfully: keep exactly the same composition, framing, colours, "
@@ -48,16 +28,6 @@ PROMPT = (
     "clarity, and remove blur, noise and compression artefacts. Do not add, "
     "remove, move or restyle anything."
 )
-
-CONTENT_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
-
-
-class UpscaleError(Exception):
-    """Raised when an image could not be upscaled."""
-
-
-def enabled():
-    return bool(config.OPENAI_API_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -173,90 +143,12 @@ def image_size(data):
 
 
 # --------------------------------------------------------------------------
-# Calling the image model
+# Upscaling
 # --------------------------------------------------------------------------
-
-
-def _multipart(fields, file_field, filename, content_type, payload):
-    boundary = uuid.uuid4().hex
-    body = bytearray()
-
-    for name, value in fields.items():
-        body += (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-            f"{value}\r\n"
-        ).encode()
-
-    body += (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="{file_field}"; '
-        f'filename="{filename}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n"
-    ).encode()
-    body += payload
-    body += f"\r\n--{boundary}--\r\n".encode()
-
-    return bytes(body), f"multipart/form-data; boundary={boundary}"
-
-
-def _api_error(error):
-    """The API's own explanation of a failed request, if it gave one."""
-    try:
-        detail = json.loads(error.read().decode("utf-8"))["error"]["message"]
-    except (ValueError, KeyError, TypeError, OSError):
-        detail = ""
-    return detail or f"HTTP {error.code}"
 
 
 def upscale(data, suffix, size, api_key=None, model=None):
     """Redraw the image at `size` (width, height). Returns JPEG bytes."""
-    api_key = api_key or config.OPENAI_API_KEY
-    if not api_key:
-        raise UpscaleError("Upscaling is not configured.")
-
-    content_type = CONTENT_TYPES.get(suffix)
-    if not content_type:
-        raise UpscaleError("Only JPEG and PNG images can be upscaled.")
-
-    body, body_type = _multipart(
-        {
-            "model": model or config.UPSCALE_MODEL,
-            "prompt": PROMPT,
-            "size": f"{size[0]}x{size[1]}",
-            "quality": "high",
-            "output_format": "jpeg",
-            "n": "1",
-        },
-        "image",
-        "image" + suffix,
-        content_type,
-        data,
+    return openai_images.edit(
+        data, suffix, size, PROMPT, "Upscaling", api_key=api_key, model=model
     )
-
-    request = urllib.request.Request(
-        EDITS_URL,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": body_type,
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as reply:
-            result = json.loads(reply.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        raise UpscaleError(f"Upscaling failed: {_api_error(error)}")
-    except urllib.error.URLError as error:
-        raise UpscaleError(f"Could not reach OpenAI: {error.reason}")
-    except (TimeoutError, socket.timeout):
-        raise UpscaleError("Upscaling timed out. Try again later.")
-    except ValueError:
-        raise UpscaleError("OpenAI sent a response that could not be read.")
-
-    try:
-        return base64.b64decode(result["data"][0]["b64_json"])
-    except (KeyError, IndexError, TypeError, ValueError):
-        raise UpscaleError("OpenAI did not return an image.")
