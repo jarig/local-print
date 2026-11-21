@@ -36,6 +36,18 @@ LOCALPRINT_MIN_COPIES=1
 LOCALPRINT_MAX_COPIES=20
 
 
+# --- OpenAI image features (optional) ---------------------------------
+#
+# With an OpenAI API key, images too small to print sharply on A4 get an
+# "Upscale" button, and Image mode offers "Generate from text". Leave it
+# unset to turn both off. Keep the key out of version control.
+#
+# LOCALPRINT_OPENAI_API_KEY=sk-...
+#
+# The image model used, if not the default gpt-image-2.
+# LOCALPRINT_OPENAI_IMAGE_MODEL=gpt-image-2
+
+
 # --- Deployment (used by deploy.ps1, ignored by the app) --------------
 
 # Where `deploy.ps1` uploads the application.

@@ -5,8 +5,11 @@ covering the parts that only exist in JavaScript: mode switching, drag and
 drop, the PDF page preview, and the no-JavaScript fallback.
 """
 import re
+from urllib.parse import urlparse
 
 import pytest
+
+from conftest import build_png
 
 playwright_api = pytest.importorskip(
     "playwright.sync_api", reason="Playwright is not installed"
@@ -54,6 +57,9 @@ def page(browser, live_server):
     page.goto(live_server)
     page.wait_for_function("() => !document.documentElement.classList.contains('no-js')")
 
+    # Lets a test that provokes a failed request discard the browser's log
+    # line about it.
+    page.console_errors = errors
     yield page
 
     # No test should leave console errors behind.
@@ -515,6 +521,339 @@ def test_a_collapsed_panel_still_sends_its_options(page, sample_files):
     select_pdf(page, sample_files["pdf1"], pages=1)
     page.click("#submit")
     expect(page.locator("#live-message")).to_contain_text("request id")
+
+
+# --------------------------------------------------------------------------
+# Upscaling low-resolution images
+# --------------------------------------------------------------------------
+
+
+def choose_image(page, path):
+    page.click("label:has(#mode-image)")
+    with page.expect_response(re.compile(r"/upscale/plan\?")):
+        choose(page, "#image", path)
+
+
+def fake_upscale(page, status=200, body=None, size=(2480, 3312)):
+    """Answer the upscale request in the browser, never reaching OpenAI."""
+    sent = []
+
+    def handle(route):
+        sent.append(route.request)
+        if status == 200:
+            route.fulfill(
+                status=200,
+                content_type="image/jpeg",
+                headers={
+                    "X-Upscaled-Width": str(size[0]),
+                    "X-Upscaled-Height": str(size[1]),
+                },
+                body=build_png(*size),
+            )
+        else:
+            route.fulfill(status=status, json=body)
+
+    page.route("**/upscale", handle)
+    return sent
+
+
+def test_a_low_resolution_image_offers_an_upscale(page, sample_files):
+    choose_image(page, sample_files["png"])
+
+    expect(page.locator("#upscale")).to_be_visible()
+    expect(page.locator("#upscale-note")).to_contain_text("Low resolution")
+    expect(page.locator("#upscale-btn")).to_have_text(
+        "Upscale 8\u00d78 \u2192 2880\u00d72880"
+    )
+
+
+def test_a_sharp_image_offers_no_upscale(page, sample_files):
+    choose_image(page, sample_files["pngSharp"])
+    expect(page.locator("#upscale")).to_be_hidden()
+
+
+def test_pdfs_offer_no_upscale(page, sample_files):
+    select_pdf(page, sample_files["pdf1"], pages=1)
+    expect(page.locator("#upscale")).to_be_hidden()
+
+
+def test_upscaling_replaces_the_image(page, sample_files):
+    sent = fake_upscale(page, size=(2880, 2880))
+    choose_image(page, sample_files["png"])
+
+    page.click("#upscale-btn")
+
+    expect(page.locator("#live-message")).to_contain_text(
+        "Upscaled from 8\u00d78 to 2880\u00d72880"
+    )
+    expect(page.locator("#filename")).to_have_text("picture-upscaled.jpg")
+    expect(page.locator("#upscale")).to_be_hidden()
+    assert page.evaluate(
+        "() => document.getElementById('image').files[0].name"
+    ) == "picture-upscaled.jpg"
+    assert len(sent) == 1
+
+
+def test_the_upscaled_image_is_what_gets_printed(page, sample_files):
+    fake_upscale(page, size=(2880, 2880))
+    choose_image(page, sample_files["png"])
+    page.click("#upscale-btn")
+    expect(page.locator("#filename")).to_have_text("picture-upscaled.jpg")
+
+    with page.expect_request(
+        lambda request: request.method == "POST"
+        and urlparse(request.url).path == "/"
+    ) as printed:
+        page.click("#submit")
+
+    assert b"picture-upscaled.jpg" in printed.value.post_data_buffer
+    expect(page.locator("#live-message")).to_contain_text("request id")
+
+
+def test_printing_waits_while_upscaling(page, sample_files):
+    pending = []
+    page.route("**/upscale", lambda route: pending.append(route))
+    choose_image(page, sample_files["png"])
+
+    page.click("#upscale-btn")
+
+    expect(page.locator("#upscale-btn")).to_be_disabled()
+    expect(page.locator("#upscale-btn")).to_contain_text("Upscaling")
+    expect(page.locator("#submit")).to_be_disabled()
+
+    # Removing the file abandons the upscale and frees the form again.
+    page.click("#remove")
+    expect(page.locator("#submit")).to_be_enabled()
+    expect(page.locator("#upscale")).to_be_hidden()
+
+
+def test_a_failed_upscale_keeps_the_original(page, sample_files):
+    fake_upscale(
+        page, status=502,
+        body={"ok": False, "message": "Upscaling failed: Rate limit reached."},
+    )
+    choose_image(page, sample_files["png"])
+
+    page.click("#upscale-btn")
+
+    expect(page.locator("#live-message")).to_contain_text("Rate limit reached")
+    expect(page.locator("#live-message")).to_have_class(re.compile(r"\berror\b"))
+    expect(page.locator("#filename")).to_have_text("picture.png")
+    expect(page.locator("#upscale-btn")).to_be_enabled()
+    expect(page.locator("#upscale-btn")).to_contain_text("Upscale 8")
+    expect(page.locator("#submit")).to_be_enabled()
+
+    page.console_errors[:] = [
+        error for error in page.console_errors if "status of 502" not in error
+    ]
+
+
+# --------------------------------------------------------------------------
+# Generating an image from a description
+# --------------------------------------------------------------------------
+
+GENERATED = (1024, 1440)
+
+
+def open_generator(page):
+    page.click("label:has(#mode-image)")
+    page.click("#generate-toggle")
+
+
+def fake_generate(page, status=200, body=None, hold=False):
+    """Answer the generate request in the browser, never reaching OpenAI."""
+    sent = []
+
+    def handle(route):
+        sent.append(route.request)
+        if hold:
+            return  # Left pending, as a slow generation would be.
+        if status == 200:
+            route.fulfill(
+                status=200,
+                content_type="image/jpeg",
+                headers={
+                    "X-Generated-Width": str(GENERATED[0]),
+                    "X-Generated-Height": str(GENERATED[1]),
+                },
+                body=build_png(*GENERATED),
+            )
+        else:
+            route.fulfill(status=status, json=body)
+
+    page.route("**/generate", handle)
+    return sent
+
+
+def test_generating_is_offered_in_image_mode_only(page):
+    expect(page.locator("#generate")).to_be_hidden()
+
+    page.click("label:has(#mode-image)")
+    expect(page.locator("#generate-toggle")).to_have_text("Generate from text")
+    expect(page.locator("#generate-panel")).to_be_hidden()
+
+    page.click("label:has(#mode-pdf)")
+    expect(page.locator("#generate")).to_be_hidden()
+
+
+def test_the_button_reveals_the_description_box(page):
+    open_generator(page)
+
+    expect(page.locator("#generate-panel")).to_be_visible()
+    expect(page.locator("#prompt")).to_be_focused()
+    expect(page.locator("#generate-toggle")).to_have_attribute(
+        "aria-expanded", "true"
+    )
+
+    page.click("#generate-toggle")
+    expect(page.locator("#generate-panel")).to_be_hidden()
+
+
+def test_the_description_box_avoids_ios_zoom(page):
+    open_generator(page)
+    size = page.locator("#prompt").evaluate(
+        "element => parseFloat(getComputedStyle(element).fontSize)"
+    )
+    assert size >= 16
+    assert page.locator("#generate-btn").bounding_box()["height"] >= 44
+
+
+def test_an_empty_description_is_refused_locally(page):
+    sent = fake_generate(page)
+    open_generator(page)
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#prompt-error")).to_contain_text("Describe the image")
+    assert sent == []
+
+
+def test_generating_shows_the_image_ready_to_print(page):
+    sent = fake_generate(page)
+    open_generator(page)
+    page.fill("#prompt", "A red fox in the snow!")
+    page.click("label.chip:has(input[value='landscape'])")
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#filename")).to_have_text(
+        "generated-a-red-fox-in-the-snow.jpg"
+    )
+    expect(page.locator("#image-view")).to_be_visible()
+    expect(page.locator("#image-view-caption")).to_have_text(
+        "1024\u00d71440 px"
+    )
+    expect(page.locator("#live-message")).to_contain_text("Image generated")
+    expect(page.locator("#generate-btn")).to_have_text("Generate again")
+    expect(page.locator("#submit")).to_be_enabled()
+    # Generated small to save cost, so a sharper print is one tap away.
+    expect(page.locator("#upscale-btn")).to_contain_text("Upscale 1024\u00d71440")
+
+    body = sent[0].post_data
+    assert "A red fox in the snow!" in body
+    assert "landscape" in body
+
+
+def test_the_chosen_style_is_sent(page):
+    sent = fake_generate(page)
+    open_generator(page)
+    expect(page.locator("#generate-style")).to_have_value("none")
+    page.fill("#prompt", "A cat on a sofa")
+    page.select_option("#generate-style", label="Line art (for colouring)")
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#generate-btn")).to_have_text("Generate again")
+    assert 'name="style"\r\n\r\nline-art\r\n' in sent[0].post_data
+
+
+def test_the_generated_image_is_what_gets_printed(page):
+    fake_generate(page)
+    open_generator(page)
+    page.fill("#prompt", "A lighthouse")
+    page.click("#generate-btn")
+    expect(page.locator("#filename")).to_have_text("generated-a-lighthouse.jpg")
+
+    with page.expect_request(
+        lambda request: request.method == "POST"
+        and urlparse(request.url).path == "/"
+    ) as printed:
+        page.click("#submit")
+
+    assert b"generated-a-lighthouse.jpg" in printed.value.post_data_buffer
+    expect(page.locator("#live-message")).to_contain_text("request id")
+
+
+def test_printing_waits_while_generating(page):
+    fake_generate(page, hold=True)
+    open_generator(page)
+    page.fill("#prompt", "A lighthouse")
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#generate-btn")).to_contain_text("Generating")
+    expect(page.locator("#generate-btn")).to_be_disabled()
+    expect(page.locator("#submit")).to_be_disabled()
+
+    # Leaving image mode abandons the generation.
+    page.click("label:has(#mode-pdf)")
+    expect(page.locator("#submit")).to_be_enabled()
+
+
+def test_choosing_a_file_abandons_a_generation(page, sample_files):
+    fake_generate(page, hold=True)
+    open_generator(page)
+    page.fill("#prompt", "A lighthouse")
+    page.click("#generate-btn")
+    expect(page.locator("#submit")).to_be_disabled()
+
+    choose(page, "#image", sample_files["png"])
+
+    expect(page.locator("#filename")).to_have_text("picture.png")
+    expect(page.locator("#submit")).to_be_enabled()
+    expect(page.locator("#generate-btn")).to_have_text("Generate")
+
+
+def test_a_failed_generation_explains_itself(page):
+    fake_generate(
+        page, status=502,
+        body={"ok": False, "message": "Image generation failed: Rejected."},
+    )
+    open_generator(page)
+    page.fill("#prompt", "A lighthouse")
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#live-message")).to_contain_text("Rejected.")
+    expect(page.locator("#generate-btn")).to_be_enabled()
+    expect(page.locator("#submit")).to_be_enabled()
+    expect(page.locator("#prompt")).to_have_value("A lighthouse")
+
+    page.console_errors[:] = [
+        error for error in page.console_errors if "status of 502" not in error
+    ]
+
+
+# --------------------------------------------------------------------------
+# Large preview
+# --------------------------------------------------------------------------
+
+
+def test_a_chosen_image_is_previewed_large(page, sample_files):
+    choose_image(page, sample_files["pngSharp"])
+
+    expect(page.locator("#image-view")).to_be_visible()
+    expect(page.locator("#image-view-caption")).to_have_text("2480\u00d73508 px")
+    assert page.locator("#image-view-img").bounding_box()["width"] > 200
+
+
+def test_the_large_preview_goes_with_the_image(page, sample_files):
+    choose_image(page, sample_files["png"])
+    page.click("#remove")
+    expect(page.locator("#image-view")).to_be_hidden()
+
+    select_pdf(page, sample_files["pdf1"], pages=1)
+    expect(page.locator("#image-view")).to_be_hidden()
 
 
 # --------------------------------------------------------------------------

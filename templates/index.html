@@ -96,6 +96,50 @@
             </div>
         </div>
 
+        {% if ai_enabled %}
+        <div class="upscale" id="upscale" hidden>
+            <p class="upscale-note" id="upscale-note"></p>
+            <button type="button" class="ai-btn" id="upscale-btn">Upscale</button>
+        </div>
+        {% endif %}
+
+        <figure class="image-view" id="image-view" hidden>
+            <img id="image-view-img" alt="Preview of the image to print">
+            <figcaption class="hint" id="image-view-caption"></figcaption>
+        </figure>
+
+        {% if ai_enabled %}
+        <div class="generate" id="generate" hidden>
+            <button type="button" class="generate-toggle" id="generate-toggle"
+                    aria-expanded="false" aria-controls="generate-panel">
+                Generate from text
+            </button>
+            <div class="generate-panel" id="generate-panel" hidden>
+                <label for="prompt">Describe the image</label>
+                <textarea id="prompt" rows="4" maxlength="{{ max_prompt_length }}"
+                          placeholder="e.g. A fox sitting in a snowy birch forest"></textarea>
+                <label for="generate-style">Style</label>
+                <select id="generate-style">
+                    {% for key, label, _instructions in style_presets %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <div class="chips" role="radiogroup" aria-label="Orientation">
+                    <label class="chip">
+                        <input type="radio" name="generate_orientation" value="portrait" checked>
+                        <span>Portrait</span>
+                    </label>
+                    <label class="chip">
+                        <input type="radio" name="generate_orientation" value="landscape">
+                        <span>Landscape</span>
+                    </label>
+                </div>
+                <p class="inline-error" id="prompt-error" hidden></p>
+                <button type="button" class="ai-btn" id="generate-btn">Generate</button>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="pdf-preview" id="pdf-preview" hidden>
             <div class="preview-head">
                 <p class="preview-summary" id="preview-summary">Reading PDF&hellip;</p>
@@ -185,6 +229,9 @@
         pdfLib: "{{ url_for('static', filename='vendor/pdf.min.js') }}",
         pdfWorker: "{{ url_for('static', filename='vendor/pdf.worker.min.js') }}",
         queueUrl: "{{ url_for('queue') }}",
+        upscaleUrl: "{{ url_for('upscale_image') }}",
+        upscalePlanUrl: "{{ url_for('upscale_plan') }}",
+        generateUrl: "{{ url_for('generate_image') }}",
         maxUploadMb: {{ max_upload_mb }}
     };
 </script>

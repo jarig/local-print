@@ -47,12 +47,35 @@
     var previewSummary = document.getElementById("preview-summary");
     var pagesStrip = document.getElementById("pages-strip");
     var toggleAllBtn = document.getElementById("toggle-all");
+    var upscaleBox = document.getElementById("upscale");
+    var upscaleNote = document.getElementById("upscale-note");
+    var upscaleBtn = document.getElementById("upscale-btn");
+    var generateBox = document.getElementById("generate");
+    var generateToggle = document.getElementById("generate-toggle");
+    var generatePanel = document.getElementById("generate-panel");
+    var promptInput = document.getElementById("prompt");
+    var promptError = document.getElementById("prompt-error");
+    var styleSelect = document.getElementById("generate-style");
+    var generateBtn = document.getElementById("generate-btn");
+    var imageView = document.getElementById("image-view");
+    var imageViewImg = document.getElementById("image-view-img");
+    var imageViewCaption = document.getElementById("image-view-caption");
     var objectUrl = null;
 
     var pageCount = 0;
     var selectedPages = null;   // Set of 1-based page numbers, or null.
     var pdfLibPromise = null;
     var renderToken = 0;        // Invalidates renders for superseded files.
+
+    var upscaleToken = 0;       // Invalidates upscale work for old files.
+    var upscaleRequest = null;
+    var upscaling = false;
+    var shownSize = null;       // Displayed size of the current image.
+
+    var generateToken = 0;      // Invalidates a generation the user left.
+    var generateRequest = null;
+    var generating = false;
+    var generateLabel = "Generate";
 
     function extensionOf(name) {
         var dot = name.lastIndexOf(".");
@@ -69,11 +92,11 @@
         return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     }
 
-    function showMessage(text, ok) {
+    function showMessage(text, ok, keepScroll) {
         liveMessage.textContent = text;
         liveMessage.className = "message " + (ok ? "ok" : "error");
         liveMessage.hidden = !text;
-        if (text) {
+        if (text && !keepScroll) {
             liveMessage.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
     }
@@ -507,10 +530,14 @@
 
     function clearFile() {
         releaseThumb();
+        resetUpscale();
         pdfInput.value = "";
         imageInput.value = "";
         thumb.innerHTML = "";
         preview.hidden = true;
+        imageView.hidden = true;
+        imageViewImg.removeAttribute("src");
+        imageViewCaption.textContent = "";
         dropIdle.hidden = false;
         dropZone.classList.remove("has-file");
         resetPreview();
@@ -518,18 +545,37 @@
 
     function renderPreview(file) {
         releaseThumb();
+        resetUpscale();
         filenameEl.textContent = file.name;
         filesizeEl.textContent = formatSize(file.size);
 
         if (file.type.indexOf("image/") === 0) {
             objectUrl = URL.createObjectURL(file);
             var img = new Image();
+            var token = upscaleToken;
+            img.onload = function () {
+                // naturalWidth honours EXIF rotation, so this is the size
+                // as it will be printed.
+                if (token === upscaleToken) {
+                    imageViewCaption.textContent =
+                        formatPixels(img.naturalWidth, img.naturalHeight) +
+                        " px";
+                    checkUpscale(img.naturalWidth, img.naturalHeight);
+                }
+            };
             img.src = objectUrl;
             img.alt = "";
             thumb.innerHTML = "";
             thumb.appendChild(img);
+
+            // The thumbnail is too small to judge a picture by, so show it
+            // properly before it is printed.
+            imageViewImg.src = objectUrl;
+            imageViewCaption.textContent = "";
+            imageView.hidden = false;
         } else {
             thumb.textContent = "PDF";
+            imageView.hidden = true;
             buildPreview(file);
         }
 
@@ -544,6 +590,9 @@
         pdfInput.disabled = !pdf;
         imageInput.disabled = pdf;
         pagesField.hidden = !pdf;
+        if (generateBox) {
+            generateBox.hidden = pdf;
+        }
         dropHint.textContent = pdf
             ? "PDF \u00b7 up to " + MAX_UPLOAD_MB + " MB"
             : "JPEG or PNG \u00b7 up to " + MAX_UPLOAD_MB + " MB";
@@ -552,7 +601,7 @@
     /** Assign a dropped/selected file to the input matching its type. */
     function acceptFile(file) {
         if (!file) {
-            return;
+            return false;
         }
 
         var ext = extensionOf(file.name);
@@ -569,7 +618,7 @@
                 "Unsupported file type \u201c." + ext + "\u201d. Choose a PDF, JPEG or PNG.",
                 false
             );
-            return;
+            return false;
         }
 
         if (MAX_BYTES && file.size > MAX_BYTES) {
@@ -578,7 +627,7 @@
                     ". The limit is " + MAX_UPLOAD_MB + " MB.",
                 false
             );
-            return;
+            return false;
         }
 
         syncMode();
@@ -591,11 +640,331 @@
             target.files = transfer.files;
         } catch (err) {
             showMessage("This browser cannot accept dropped files.", false);
-            return;
+            return false;
         }
 
         showMessage("", true);
         renderPreview(file);
+        return true;
+    }
+
+    // --- Upscaling --------------------------------------------------------
+
+    function formatPixels(width, height) {
+        return width + "\u00d7" + height;
+    }
+
+    function setUpscaling(busy) {
+        upscaling = busy;
+        upscaleBtn.disabled = busy;
+        syncSubmitLock();
+    }
+
+    /**
+     * Printing the current image while its replacement is on the way would
+     * waste paper on exactly the print the replacement is meant to avoid.
+     */
+    function syncSubmitLock() {
+        submitBtn.disabled = upscaling || generating;
+    }
+
+    /** Forget any upscale offer or request for the previous file. */
+    function resetUpscale() {
+        if (!upscaleBox) {
+            return;
+        }
+
+        upscaleToken += 1;
+        shownSize = null;
+        if (upscaleRequest) {
+            upscaleRequest.abort();
+            upscaleRequest = null;
+        }
+        if (upscaling) {
+            setUpscaling(false);
+        }
+        upscaleBox.hidden = true;
+    }
+
+    /** Ask the server whether this image is too small for A4. */
+    function checkUpscale(width, height) {
+        var url = window.LOCALPRINT && window.LOCALPRINT.upscalePlanUrl;
+        if (!upscaleBox || !url || !width || !height) {
+            return;
+        }
+
+        var token = upscaleToken;
+        var request = new XMLHttpRequest();
+        request.open(
+            "GET",
+            url + "?width=" + width + "&height=" + height
+        );
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+        request.addEventListener("load", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+
+            var plan = null;
+            try {
+                plan = JSON.parse(request.responseText);
+            } catch (err) {
+                plan = null;
+            }
+            if (!plan || !plan.ok || !plan.low_res) {
+                return;
+            }
+
+            shownSize = { width: width, height: height };
+            upscaleNote.textContent =
+                "Low resolution for A4: " + plan.dpi + " dpi. " +
+                "It may print blurry.";
+
+            var target = plan.target;
+            upscaleBtn.hidden = !target;
+            if (target) {
+                upscaleBtn.textContent =
+                    "Upscale " + formatPixels(width, height) +
+                    " \u2192 " + formatPixels(target.width, target.height);
+                upscaleBtn.title =
+                    "About " + target.dpi + " dpi on A4";
+            }
+            upscaleBox.hidden = false;
+        });
+        request.send();
+    }
+
+    /** The server's JSON message from a failed blob request. */
+    function readBlobError(request, fallback) {
+        return new Promise(function (resolve) {
+            fallback = fallback + " (HTTP " + request.status + ").";
+            var blob = request.response;
+            if (!blob || typeof blob.text !== "function") {
+                resolve(fallback);
+                return;
+            }
+            blob.text().then(function (text) {
+                try {
+                    resolve(JSON.parse(text).message || fallback);
+                } catch (err) {
+                    resolve(fallback);
+                }
+            }, function () {
+                resolve(fallback);
+            });
+        });
+    }
+
+    function startUpscale() {
+        var url = window.LOCALPRINT && window.LOCALPRINT.upscaleUrl;
+        var file = imageInput.files && imageInput.files[0];
+        if (!url || !file || !shownSize || upscaling) {
+            return;
+        }
+
+        var token = upscaleToken;
+        var original = shownSize;
+        var label = upscaleBtn.textContent;
+
+        setUpscaling(true);
+        upscaleBtn.textContent = "Upscaling\u2026 this can take a minute";
+        showMessage("", true);
+
+        var data = new FormData();
+        data.append("image", file);
+        data.append("width", String(original.width));
+        data.append("height", String(original.height));
+
+        var request = new XMLHttpRequest();
+        upscaleRequest = request;
+        request.open("POST", url);
+        request.responseType = "blob";
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+
+        request.addEventListener("load", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+            upscaleRequest = null;
+            setUpscaling(false);
+
+            if (request.status !== 200) {
+                upscaleBtn.textContent = label;
+                readBlobError(request, "Upscaling failed").then(function (message) {
+                    if (token === upscaleToken) {
+                        showMessage(message, false);
+                    }
+                });
+                return;
+            }
+
+            var base = file.name.replace(/\.[^.]*$/, "") || "image";
+            var upscaled = new File(
+                [request.response],
+                base + "-upscaled.jpg",
+                { type: "image/jpeg" }
+            );
+
+            if (acceptFile(upscaled)) {
+                showMessage(
+                    "Upscaled from " +
+                        formatPixels(original.width, original.height) +
+                        " to " +
+                        formatPixels(
+                            request.getResponseHeader("X-Upscaled-Width"),
+                            request.getResponseHeader("X-Upscaled-Height")
+                        ) +
+                        ". Ready to print.",
+                    true
+                );
+            } else {
+                upscaleBtn.textContent = label;
+            }
+        });
+
+        request.addEventListener("error", function () {
+            if (token !== upscaleToken) {
+                return;
+            }
+            upscaleRequest = null;
+            setUpscaling(false);
+            upscaleBtn.textContent = label;
+            showMessage("Could not reach the print server.", false);
+        });
+
+        request.send(data);
+    }
+
+    // --- Generating from a description ------------------------------------
+
+    function setGenerating(busy) {
+        generating = busy;
+        generateBtn.disabled = busy;
+        promptInput.readOnly = busy;
+        generateBtn.textContent = busy
+            ? "Generating\u2026 this can take a minute"
+            : generateLabel;
+        syncSubmitLock();
+    }
+
+    /** Abandon a generation the user has moved on from. */
+    function cancelGenerate() {
+        if (!generateBox) {
+            return;
+        }
+
+        generateToken += 1;
+        if (generateRequest) {
+            generateRequest.abort();
+            generateRequest = null;
+        }
+        if (generating) {
+            setGenerating(false);
+        }
+    }
+
+    function slugify(text) {
+        var slug = text
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 40)
+            .replace(/-+$/, "");
+        return slug || "image";
+    }
+
+    function chosenOrientation() {
+        var checked = generatePanel.querySelector(
+            'input[name="generate_orientation"]:checked'
+        );
+        return checked ? checked.value : "portrait";
+    }
+
+    function startGenerate() {
+        var url = window.LOCALPRINT && window.LOCALPRINT.generateUrl;
+        var prompt = promptInput.value.trim();
+        if (!url || generating) {
+            return;
+        }
+
+        if (!prompt) {
+            promptError.textContent = "Describe the image to generate.";
+            promptError.hidden = false;
+            promptInput.focus();
+            return;
+        }
+        promptError.hidden = true;
+
+        var token = generateToken;
+        setGenerating(true);
+        showMessage("", true);
+
+        var data = new FormData();
+        data.append("prompt", prompt);
+        data.append("orientation", chosenOrientation());
+        data.append("style", styleSelect.value);
+
+        var request = new XMLHttpRequest();
+        generateRequest = request;
+        request.open("POST", url);
+        request.responseType = "blob";
+        request.setRequestHeader("X-Requested-With", "LocalPrint");
+
+        request.addEventListener("load", function () {
+            if (token !== generateToken) {
+                return;
+            }
+            generateRequest = null;
+
+            if (request.status !== 200) {
+                setGenerating(false);
+                readBlobError(request, "Image generation failed").then(
+                    function (message) {
+                        if (token === generateToken) {
+                            showMessage(message, false);
+                        }
+                    }
+                );
+                return;
+            }
+
+            var generated = new File(
+                [request.response],
+                "generated-" + slugify(prompt) + ".jpg",
+                { type: "image/jpeg" }
+            );
+
+            if (acceptFile(generated)) {
+                generateLabel = "Generate again";
+                showMessage(
+                    "Image generated. Check the preview, then print.",
+                    true,
+                    true
+                );
+                // Bring the result into view once it has a height, so the
+                // scroll lands where the picture actually is.
+                var reveal = function () {
+                    dropZone.scrollIntoView({ block: "start", behavior: "smooth" });
+                };
+                if (imageViewImg.complete && imageViewImg.naturalWidth) {
+                    reveal();
+                } else {
+                    imageViewImg.addEventListener("load", reveal, { once: true });
+                }
+            }
+            setGenerating(false);
+        });
+
+        request.addEventListener("error", function () {
+            if (token !== generateToken) {
+                return;
+            }
+            generateRequest = null;
+            setGenerating(false);
+            showMessage("Could not reach the print server.", false);
+        });
+
+        request.send(data);
     }
 
     function validatePages() {
@@ -657,10 +1026,12 @@
     imageInput.required = false;
 
     modePdf.addEventListener("change", function () {
+        cancelGenerate();
         syncMode();
         clearFile();
     });
     modeImage.addEventListener("change", function () {
+        cancelGenerate();
         syncMode();
         clearFile();
     });
@@ -676,13 +1047,16 @@
         activeInput().click();
     });
 
+    // A file the user picks themselves wins over a generation in flight.
     pdfInput.addEventListener("change", function () {
         if (pdfInput.files[0]) {
+            cancelGenerate();
             acceptFile(pdfInput.files[0]);
         }
     });
     imageInput.addEventListener("change", function () {
         if (imageInput.files[0]) {
+            cancelGenerate();
             acceptFile(imageInput.files[0]);
         }
     });
@@ -692,6 +1066,34 @@
         clearFile();
         showMessage("", true);
     });
+
+    if (upscaleBtn) {
+        upscaleBtn.addEventListener("click", startUpscale);
+    }
+
+    if (generateBox) {
+        generateToggle.addEventListener("click", function () {
+            var open = generatePanel.hidden;
+            generatePanel.hidden = !open;
+            generateToggle.setAttribute("aria-expanded", open ? "true" : "false");
+            if (open) {
+                promptInput.focus();
+            }
+        });
+
+        generateBtn.addEventListener("click", startGenerate);
+
+        promptInput.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                startGenerate();
+            }
+        });
+
+        promptInput.addEventListener("input", function () {
+            promptError.hidden = true;
+        });
+    }
 
     ["dragenter", "dragover"].forEach(function (name) {
         dropZone.addEventListener(name, function (event) {
@@ -710,6 +1112,7 @@
     dropZone.addEventListener("drop", function (event) {
         var files = event.dataTransfer && event.dataTransfer.files;
         if (files && files.length) {
+            cancelGenerate();
             acceptFile(files[0]);
         }
     });

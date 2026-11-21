@@ -73,6 +73,8 @@ $target = "$RemoteUser@$RemoteHost"
 $files = @(
     "app.py",
     "printing.py",
+    "upscale.py",
+    "openai_images.py",
     "config.py",
     "requirements.txt",
     "start.sh",
@@ -128,6 +130,8 @@ try {
     Write-Host "Uploading to ${target}:~/$RemotePath/..." -ForegroundColor Cyan
     scp (Join-Path $staging "app.py") `
         (Join-Path $staging "printing.py") `
+        (Join-Path $staging "upscale.py") `
+        (Join-Path $staging "openai_images.py") `
         (Join-Path $staging "config.py") `
         (Join-Path $staging "requirements.txt") `
         (Join-Path $staging "start.sh") `

@@ -1,10 +1,14 @@
 """Shared fixtures for the LocalPrint test suite."""
+import base64
+import io
+import json
 import os
 import socket
 import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import zlib
 from pathlib import Path
 
@@ -20,7 +24,14 @@ os.environ["LOCALPRINT_CONFIG"] = str(ROOT / "localprint.conf.example")
 # The app must never touch a real printer during tests.
 os.environ["LOCALPRINT_FAKE_PRINTER"] = "1"
 
+# Nor spend money on OpenAI. A real key is only used by the opt-in live test,
+# which reads its own variable.
+os.environ.pop("LOCALPRINT_OPENAI_API_KEY", None)
+FAKE_OPENAI_KEY = "sk-test-not-a-real-key"
+
 import app as app_module  # noqa: E402
+import config  # noqa: E402
+import openai_images  # noqa: E402
 import printing  # noqa: E402
 
 
@@ -152,6 +163,8 @@ def sample_files(tmp_path_factory):
         # Deliberately capitalised, to guard the extension check.
         "pdfUpper": ("Contract.PDF", build_pdf(3)),
         "png": ("picture.png", build_png()),
+        # Fills A4 at about 300 dpi, so it needs no upscaling.
+        "pngSharp": ("sharp.png", build_png(2480, 3508)),
         "txt": ("notes.txt", b"not printable"),
     }
 
@@ -185,6 +198,49 @@ def flask_app():
 @pytest.fixture
 def client(flask_app):
     return flask_app.test_client()
+
+
+# --------------------------------------------------------------------------
+# OpenAI, stubbed
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_key(monkeypatch):
+    """Turn the AI features on, with a key that is never sent anywhere."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", FAKE_OPENAI_KEY)
+    return FAKE_OPENAI_KEY
+
+
+class _FakeReply(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def openai(monkeypatch):
+    """Stand in for the OpenAI image API, recording every request."""
+    state = {"result": b"fake-jpeg", "error": None, "calls": []}
+
+    def fake_urlopen(request, timeout):
+        state["calls"].append({"request": request, "timeout": timeout})
+        if state["error"]:
+            raise state["error"]
+        image = base64.b64encode(state["result"]).decode()
+        return _FakeReply(json.dumps({"data": [{"b64_json": image}]}).encode())
+
+    monkeypatch.setattr(openai_images.urllib.request, "urlopen", fake_urlopen)
+    return state
+
+
+def http_error(status, body):
+    """An error response from the API, as urllib raises it."""
+    return urllib.error.HTTPError(
+        openai_images.EDITS_URL, status, "error", {}, io.BytesIO(body)
+    )
 
 
 @pytest.fixture
@@ -231,6 +287,9 @@ def live_server(tmp_path_factory):
     environment["LOCALPRINT_FAKE_PRINTER"] = "1"
     environment["LOCALPRINT_DEBUG"] = "0"
     environment["LOCALPRINT_PORT"] = str(port)
+    # Turns the Upscale button on. Browser tests intercept the upscale
+    # request itself, so this key never reaches OpenAI.
+    environment["LOCALPRINT_OPENAI_API_KEY"] = FAKE_OPENAI_KEY
 
     # The server logs every request, so its output goes to a file rather than
     # a pipe: an undrained pipe fills up and blocks the server mid-suite.
@@ -277,4 +336,9 @@ def live_server(tmp_path_factory):
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "e2e: browser test, requires Playwright"
+    )
+    config.addinivalue_line(
+        "markers",
+        "openai: calls the real OpenAI API; runs only when "
+        "LOCALPRINT_TEST_OPENAI_API_KEY is set",
     )

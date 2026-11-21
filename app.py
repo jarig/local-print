@@ -7,6 +7,7 @@ import tempfile
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     render_template,
@@ -15,7 +16,9 @@ from flask import (
 )
 
 import config
+import openai_images
 import printing
+import upscale
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_SIZE
@@ -106,6 +109,9 @@ def respond(message, status=200, ok=False):
         max_copies=config.MAX_COPIES,
         printer_options=printing.discover_options(),
         queue=printing.queue_status(),
+        ai_enabled=openai_images.enabled(),
+        max_prompt_length=MAX_PROMPT_LENGTH,
+        style_presets=STYLE_PRESETS,
     ), status
 
 
@@ -239,6 +245,195 @@ def clear_queue():
         )
 
     return redirect(url_for("index", message=message))
+
+
+# Generous, but stops an absurd size from reaching the arithmetic.
+MAX_IMAGE_EDGE = 100_000
+
+
+def parse_dimension(name, required=True):
+    raw = request.values.get(name, "")
+    if not raw and not required:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a whole number of pixels.")
+    if not 1 <= value <= MAX_IMAGE_EDGE:
+        raise ValueError(f"{name} must be between 1 and {MAX_IMAGE_EDGE}.")
+    return value
+
+
+@app.route("/upscale/plan")
+def upscale_plan():
+    """Whether an image of this size is too small for A4, and the fix."""
+    if not openai_images.enabled():
+        return jsonify(ok=False, message="Upscaling is not configured."), 404
+    try:
+        width = parse_dimension("width")
+        height = parse_dimension("height")
+    except ValueError as error:
+        return jsonify(ok=False, message=str(error)), 400
+    return jsonify(ok=True, **upscale.plan(width, height))
+
+
+@app.route("/upscale", methods=["POST"])
+def upscale_image():
+    """Upscale an image and send it back for the browser to print."""
+    if not openai_images.enabled():
+        return jsonify(ok=False, message="Upscaling is not configured."), 404
+
+    image = request.files.get("image")
+    if not image or not image.filename:
+        return jsonify(ok=False, message="Please select an image."), 400
+
+    _, suffix = os.path.splitext(image.filename.lower())
+    if suffix not in config.IMAGE_EXTENSIONS:
+        return jsonify(ok=False, message="Image must be a JPEG or PNG."), 400
+
+    data = image.read()
+    try:
+        width, height = upscale.image_size(data)
+
+        # The browser reports the size as displayed. A photo with an EXIF
+        # rotation stores its edges the other way round, and only the
+        # displayed orientation tells the model which way up to draw it.
+        shown = (
+            parse_dimension("width", required=False),
+            parse_dimension("height", required=False),
+        )
+        if all(shown) and sorted(shown) == sorted((width, height)):
+            width, height = shown
+    except ValueError as error:
+        return jsonify(ok=False, message=str(error)), 400
+
+    target = upscale.plan(width, height)["target"]
+    if not target:
+        return jsonify(
+            ok=False,
+            message="This image is already sharp enough for A4.",
+        ), 400
+
+    size = (target["width"], target["height"])
+    try:
+        result = upscale.upscale(data, suffix, size)
+    except openai_images.OpenAIError as error:
+        return jsonify(ok=False, message=str(error)), 502
+
+    return Response(
+        result,
+        mimetype="image/jpeg",
+        headers={
+            "X-Upscaled-Width": str(size[0]),
+            "X-Upscaled-Height": str(size[1]),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+# A4's proportions (1:√2) at the smallest size that still previews well,
+# about 123 dpi on paper. Output tokens, and so cost, grow with the pixel
+# count; a picture worth printing sharply can be upscaled afterwards.
+GENERATE_SIZES = {
+    "portrait": (1024, 1440),
+    "landscape": (1440, 1024),
+}
+
+# Low quality costs about a tenth of medium (153 against 1,418 output tokens
+# at 1024x1440) and is barely distinguishable on paper.
+GENERATE_QUALITY = "low"
+
+# The model accepts far more, but a description longer than this is almost
+# certainly a paste gone wrong.
+MAX_PROMPT_LENGTH = 4000
+
+# Style presets for generated images: (key, label, instructions). The
+# browser only ever sends a key, so the instructions sent to OpenAI are
+# always one of these.
+STYLE_PRESETS = (
+    ("none", "No style", ""),
+    (
+        "line-art",
+        "Line art (for colouring)",
+        "Black-and-white line art for a printable colouring page. Clean, "
+        "bold, smooth black outlines of even weight on a pure white "
+        "background. Every shape is a closed outline with clear, open space "
+        "inside it for colouring by hand. Strictly no colour, no grey, no "
+        "shading, no hatching, no gradients, no filled black areas and no "
+        "texture. Keep the detail simple enough to colour with pencils or "
+        "crayons. No text, no border and no frame.",
+    ),
+    (
+        "photo",
+        "Photo",
+        "A realistic, natural-looking photograph with true-to-life colours, "
+        "natural lighting and sharp focus on the subject.",
+    ),
+    (
+        "watercolour",
+        "Watercolour",
+        "A watercolour painting on textured paper, with soft washes, gentle "
+        "colour bleeds and visible brush strokes.",
+    ),
+    (
+        "cartoon",
+        "Cartoon",
+        "A bright, friendly cartoon illustration with clean outlines, flat "
+        "cheerful colours and simple shapes.",
+    ),
+)
+STYLE_INSTRUCTIONS = {key: text for key, _label, text in STYLE_PRESETS}
+
+
+def compose_prompt(description, style):
+    """The description as typed, framed by the chosen style's instructions."""
+    instructions = STYLE_INSTRUCTIONS[style]
+    if not instructions:
+        return description
+    return f"{instructions}\n\nSubject: {description}"
+
+
+@app.route("/generate", methods=["POST"])
+def generate_image():
+    """Draw an image from a description, for the browser to preview."""
+    if not openai_images.enabled():
+        return jsonify(ok=False, message="Image generation is not configured."), 404
+
+    prompt = (request.form.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify(ok=False, message="Describe the image to generate."), 400
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        return jsonify(
+            ok=False,
+            message=f"The description is too long. Keep it under "
+            f"{MAX_PROMPT_LENGTH} characters.",
+        ), 400
+
+    orientation = request.form.get("orientation") or "portrait"
+    size = GENERATE_SIZES.get(orientation)
+    if not size:
+        return jsonify(ok=False, message="Invalid orientation."), 400
+
+    style = request.form.get("style") or "none"
+    if style not in STYLE_INSTRUCTIONS:
+        return jsonify(ok=False, message="Unknown style."), 400
+
+    try:
+        result = openai_images.generate(
+            compose_prompt(prompt, style), size, quality=GENERATE_QUALITY
+        )
+    except openai_images.OpenAIError as error:
+        return jsonify(ok=False, message=str(error)), 502
+
+    return Response(
+        result,
+        mimetype="image/jpeg",
+        headers={
+            "X-Generated-Width": str(size[0]),
+            "X-Generated-Height": str(size[1]),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.errorhandler(413)
