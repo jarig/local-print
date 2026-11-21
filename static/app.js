@@ -55,6 +55,7 @@
     var generatePanel = document.getElementById("generate-panel");
     var promptInput = document.getElementById("prompt");
     var promptError = document.getElementById("prompt-error");
+    var styleSelect = document.getElementById("generate-style");
     var generateBtn = document.getElementById("generate-btn");
     var imageView = document.getElementById("image-view");
     var imageViewImg = document.getElementById("image-view-img");
@@ -901,6 +902,7 @@
         var data = new FormData();
         data.append("prompt", prompt);
         data.append("orientation", chosenOrientation());
+        data.append("style", styleSelect.value);
 
         var request = new XMLHttpRequest();
         generateRequest = request;

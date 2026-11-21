@@ -855,7 +855,8 @@ textarea:focus-visible {
     outline-offset: 2px;
 }
 
-.option-field select {
+.option-field select,
+.generate-panel select {
     width: 100%;
     min-height: 48px;
     padding: 11px;
@@ -867,7 +868,8 @@ textarea:focus-visible {
     border-radius: 10px;
 }
 
-.option-field select:focus-visible {
+.option-field select:focus-visible,
+.generate-panel select:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
 }

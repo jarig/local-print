@@ -305,8 +305,22 @@ key's OpenAI account.
 ## Generating images
 
 With the same key, Image mode offers **Generate from text**. Tapping it
-opens a box to describe the picture and a choice of portrait or landscape;
-**Generate** asks OpenAI's image model to draw it.
+opens a box to describe the picture, a **Style** preset and a choice of
+portrait or landscape; **Generate** asks OpenAI's image model to draw it.
+
+Describe only *what* is in the picture; the preset adds instructions for
+*how* it looks before the request is sent:
+
+| Style | Adds |
+| --- | --- |
+| No style | Nothing — the description is sent as typed |
+| Line art (for colouring) | Black outlines on a pure white background, closed shapes with room to colour in, no shading, grey or filled areas — a printable colouring page |
+| Photo | A realistic photograph |
+| Watercolour | A watercolour painting on textured paper |
+| Cartoon | A bright cartoon with flat colours |
+
+The presets live in `STYLE_PRESETS` in `app.py`. The browser only sends the
+preset's key, so the instructions are always the ones defined there.
 
 The image is drawn in A4's proportions at 1024×1440 with OpenAI's `low`
 quality, which keeps each image to roughly 150 output tokens — about half a

@@ -754,6 +754,19 @@ def test_generating_shows_the_image_ready_to_print(page):
     assert "landscape" in body
 
 
+def test_the_chosen_style_is_sent(page):
+    sent = fake_generate(page)
+    open_generator(page)
+    expect(page.locator("#generate-style")).to_have_value("none")
+    page.fill("#prompt", "A cat on a sofa")
+    page.select_option("#generate-style", label="Line art (for colouring)")
+
+    page.click("#generate-btn")
+
+    expect(page.locator("#generate-btn")).to_have_text("Generate again")
+    assert 'name="style"\r\n\r\nline-art\r\n' in sent[0].post_data
+
+
 def test_the_generated_image_is_what_gets_printed(page):
     fake_generate(page)
     open_generator(page)

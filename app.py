@@ -111,6 +111,7 @@ def respond(message, status=200, ok=False):
         queue=printing.queue_status(),
         ai_enabled=openai_images.enabled(),
         max_prompt_length=MAX_PROMPT_LENGTH,
+        style_presets=STYLE_PRESETS,
     ), status
 
 
@@ -346,6 +347,51 @@ GENERATE_QUALITY = "low"
 # certainly a paste gone wrong.
 MAX_PROMPT_LENGTH = 4000
 
+# Style presets for generated images: (key, label, instructions). The
+# browser only ever sends a key, so the instructions sent to OpenAI are
+# always one of these.
+STYLE_PRESETS = (
+    ("none", "No style", ""),
+    (
+        "line-art",
+        "Line art (for colouring)",
+        "Black-and-white line art for a printable colouring page. Clean, "
+        "bold, smooth black outlines of even weight on a pure white "
+        "background. Every shape is a closed outline with clear, open space "
+        "inside it for colouring by hand. Strictly no colour, no grey, no "
+        "shading, no hatching, no gradients, no filled black areas and no "
+        "texture. Keep the detail simple enough to colour with pencils or "
+        "crayons. No text, no border and no frame.",
+    ),
+    (
+        "photo",
+        "Photo",
+        "A realistic, natural-looking photograph with true-to-life colours, "
+        "natural lighting and sharp focus on the subject.",
+    ),
+    (
+        "watercolour",
+        "Watercolour",
+        "A watercolour painting on textured paper, with soft washes, gentle "
+        "colour bleeds and visible brush strokes.",
+    ),
+    (
+        "cartoon",
+        "Cartoon",
+        "A bright, friendly cartoon illustration with clean outlines, flat "
+        "cheerful colours and simple shapes.",
+    ),
+)
+STYLE_INSTRUCTIONS = {key: text for key, _label, text in STYLE_PRESETS}
+
+
+def compose_prompt(description, style):
+    """The description as typed, framed by the chosen style's instructions."""
+    instructions = STYLE_INSTRUCTIONS[style]
+    if not instructions:
+        return description
+    return f"{instructions}\n\nSubject: {description}"
+
 
 @app.route("/generate", methods=["POST"])
 def generate_image():
@@ -368,8 +414,14 @@ def generate_image():
     if not size:
         return jsonify(ok=False, message="Invalid orientation."), 400
 
+    style = request.form.get("style") or "none"
+    if style not in STYLE_INSTRUCTIONS:
+        return jsonify(ok=False, message="Unknown style."), 400
+
     try:
-        result = openai_images.generate(prompt, size, quality=GENERATE_QUALITY)
+        result = openai_images.generate(
+            compose_prompt(prompt, style), size, quality=GENERATE_QUALITY
+        )
     except openai_images.OpenAIError as error:
         return jsonify(ok=False, message=str(error)), 502
 

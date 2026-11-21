@@ -117,7 +117,13 @@
             <div class="generate-panel" id="generate-panel" hidden>
                 <label for="prompt">Describe the image</label>
                 <textarea id="prompt" rows="4" maxlength="{{ max_prompt_length }}"
-                          placeholder="e.g. A watercolour fox in a snowy forest, soft morning light"></textarea>
+                          placeholder="e.g. A fox sitting in a snowy birch forest"></textarea>
+                <label for="generate-style">Style</label>
+                <select id="generate-style">
+                    {% for key, label, _instructions in style_presets %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
                 <div class="chips" role="radiogroup" aria-label="Orientation">
                     <label class="chip">
                         <input type="radio" name="generate_orientation" value="portrait" checked>
